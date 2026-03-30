@@ -23,7 +23,7 @@ var (
 
 // EncodeGPU - Use FFMPEG GPU version
 func EncodeGPU(dest []common.VisualData, width, height, iterations, textureSize, framerate int, filename string, debug bool) error {
-	log.Info(fmt.Sprintf("Rendering graphics data for %d elements with GPU-optimized frames", len(dest)))
+	log.Info("Rendering graphics data for %d elements with GPU-optimized frames", len(dest))
 	log.Info(fmt.Sprintf("Current configuration:\n  - Width: %v\n  - Height: %v\n  - Iterations: %v\n  - TextureSize: %v\n  - Framerate: %v",
 		width, height, iterations, textureSize, framerate))
 
