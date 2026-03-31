@@ -70,7 +70,7 @@ func EncodeGPU(dest []common.VisualData, width, height, iterations, textureSize,
 		}
 		batch := dest[i:end]
 
-		renderTimer := time.Now()
+		//renderTimer := time.Now()
 		for _, block := range batch {
 			tex, ok := getRawTexture(block.BlockTexture)
 			if !ok {
@@ -101,13 +101,13 @@ func EncodeGPU(dest []common.VisualData, width, height, iterations, textureSize,
 				}
 			}
 		}
-		log.Infof("Frame Render: %v", time.Since(renderTimer))
+		//log.Infof("Frame Render: %v", time.Since(renderTimer))
 
-		pipeTimer := time.Now()
+		//pipeTimer := time.Now()
 		if _, err := pw.Write(pix); err != nil {
 			return fmt.Errorf("ffmpeg pipe broken: %w", err)
 		}
-		log.Infof("Pipe Write: %v", time.Since(pipeTimer))
+		//log.Infof("Pipe Write: %v", time.Since(pipeTimer))
 
 		if (i/batchSize)%100 == 0 {
 			log.Infof("Progress: %d/%d frames", (i/batchSize)+1, totalFrames)
