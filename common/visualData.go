@@ -1,6 +1,8 @@
 package common
 
-import "time"
+import (
+	"time"
+)
 
 // Example of data in clickhouse DB:
 // 2025-03-27T23:27:48.858300+03:00,382,149,RED_CONCRETE
@@ -10,4 +12,5 @@ type VisualData struct {
 	X            int64     `json:"x"`
 	Y            int64     `json:"y"`
 	BlockTexture string    `json:"c"`
+	Owner        string    `json:"owner"`
 }

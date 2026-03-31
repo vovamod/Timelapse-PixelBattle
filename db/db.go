@@ -4,18 +4,23 @@ import (
 	"Timelapse-PixelBattle/common"
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 
-	"github.com/vovamod/utils/log"
-
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/vovamod/utils/log"
+	_ "modernc.org/sqlite"
 )
 
 var (
-	client driver.Conn
+	clientCH    driver.Conn
+	clientLocal *sql.DB
+	local       = false
 )
 
 func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName string) (driver.Conn, error) {
@@ -42,9 +47,6 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 				var d net.Dialer
 				return d.DialContext(ctx, "tcp", addr)
 			},
-			Debugf: func(format string, v ...interface{}) {
-				log.Info(format, v)
-			},
 			TLS: &tls.Config{
 				InsecureSkipVerify: true,
 			},
@@ -64,73 +66,128 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 	if err = conn.Ping(ctx); err != nil {
 		var exception *clickhouse.Exception
 		if errors.As(err, &exception) {
-			log.Info("Exception [%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
+			log.Infof("Exception [%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
 		}
 		return nil, err
 	}
 	return conn, nil
 }
 
-func Init(databaseIp, databaseUser, databasePassword, databaseName string) {
-	conn, err := ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName)
-	if err != nil {
-		log.Info(err.Error())
-		panic(err)
+func Init(databaseSource, databaseIp, databaseUser, databasePassword, databaseName string, localOnly bool) {
+	local = localOnly
+	if localOnly == true {
+		driverS := "mysql"
+		if strings.HasSuffix(databaseSource, ".db") || strings.HasSuffix(databaseSource, ".sqlite") {
+			driverS = "sqlite"
+		}
+		conn, err := sql.Open(driverS, databaseSource)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+		clientLocal = conn
+	} else {
+		conn, err := ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+
+		clientCH = conn
 	}
-	client = conn
 }
 
 func Close() {
-	err := client.Close()
-	if err != nil {
-		log.Error("Error closing clickhouse client: %s", err.Error())
+	if local != true {
+		err := clientCH.Close()
+		if err != nil {
+			log.Errorf("Error closing clickhouse client: %s", err.Error())
+		}
+	} else {
+		err := clientLocal.Close()
+		if err != nil {
+			log.Errorf("Error closing sql client: %s", err.Error())
+		}
 	}
 }
 
-func GetData(offset int) *[]common.VisualData {
-	var off []common.VisualData
-	query := `SELECT timestamp, x, y, c FROM PB ORDER BY timestamp LIMIT 1000 OFFSET ?`
+func GetData(table string, offset int) *[]common.VisualData {
+	var singleData common.VisualData
+	var preparedData []common.VisualData
+	var rowsCh driver.Rows
+	var rowsL *sql.Rows
+	var err error
 
-	rows, err := client.Query(context.Background(), query, offset*1000)
-	if err != nil {
-		log.Info(err.Error())
-		return &off
-	}
-	defer func(rows driver.Rows) {
-		err = rows.Close()
+	if local != true {
+		rowsCh, err = clientCH.Query(context.Background(), `SELECT timestamp, x, y, c FROM $1 ORDER BY timestamp LIMIT 1000 OFFSET $2`, table, offset*1000)
 		if err != nil {
 			log.Info(err.Error())
+			return new([]common.VisualData)
 		}
-	}(rows)
-
-	// Prepare a slice to hold the results
-	var data []common.VisualData
-	// Loop over the rows and scan them into the VisualData struct. (at least not direct []byte impl like previous time)
-	for rows.Next() {
-		var vd common.VisualData
-		if err = rows.Scan(&vd.Time, &vd.X, &vd.Y, &vd.BlockTexture); err != nil {
+		defer func(rows driver.Rows) {
+			err = rows.Close()
+			if err != nil {
+				log.Info(err.Error())
+			}
+		}(rowsCh)
+	} else {
+		rowsL, err = clientLocal.Query(fmt.Sprintf(`SELECT timestamp, x, y, c FROM %s ORDER BY timestamp LIMIT 8192 OFFSET %v`, table, offset))
+		if err != nil {
 			log.Info(err.Error())
-			return &off
+			return new([]common.VisualData)
 		}
-		vd.BlockTexture = strings.ToLower(vd.BlockTexture) + ".png"
-		data = append(data, vd)
+		defer func(rows *sql.Rows) {
+			err = rows.Close()
+			if err != nil {
+				log.Info(err.Error())
+			}
+		}(rowsL)
 	}
 
-	// Check for any errors encountered during iteration
-	if err = rows.Err(); err != nil {
-		log.Info(err.Error())
-		return &off
+	if local != true {
+		for rowsCh.Next() {
+			if err = rowsCh.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture); err != nil {
+				log.Info(err.Error())
+				return new([]common.VisualData)
+			}
+			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
+			preparedData = append(preparedData, singleData)
+			singleData = common.VisualData{} // clean this mf
+		}
+
+		if err = rowsCh.Err(); err != nil {
+			log.Info(err.Error())
+			return new([]common.VisualData)
+		}
+	} else {
+		for rowsL.Next() {
+			if err = rowsL.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture); err != nil {
+				log.Info(err.Error())
+				return new([]common.VisualData)
+			}
+			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
+			preparedData = append(preparedData, singleData)
+			singleData = common.VisualData{} // clean this mf
+		}
+
+		// Check for any errors encountered during iteration
+		if err = rowsL.Err(); err != nil {
+			log.Info(err.Error())
+			return new([]common.VisualData)
+		}
 	}
 
-	return &data
+	return &preparedData
 }
 
-func GetMaxCount() (int, error) {
-	query := `SELECT COUNT(*) FROM PB`
+func GetMaxCount(table string) (int, error) {
 	var totalRecords uint64
-	if err := client.QueryRow(context.Background(), query).Scan(&totalRecords); err != nil {
-		return 0, err
+	if local != true {
+		if err := clientCH.QueryRow(context.Background(), `SELECT COUNT(*) FROM $1`, table).Scan(&totalRecords); err != nil {
+			return 0, err
+		}
+	} else {
+		if err := clientLocal.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&totalRecords); err != nil {
+			return 0, err
+		}
 	}
-
 	return int(totalRecords), nil
 }

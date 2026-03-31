@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/vovamod/utils/log"
@@ -16,14 +16,9 @@ import (
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
 
-var (
-	imgTmp      *image.Image
-	frameBuffer []byte
-)
-
 // EncodeGPU - Use FFMPEG GPU version
 func EncodeGPU(dest []common.VisualData, width, height, iterations, textureSize, framerate int, filename string, debug bool) error {
-	log.Info("Rendering graphics data for %d elements with GPU-optimized frames", len(dest))
+	log.Info(fmt.Sprintf("Rendering graphics data for %d elements with GPU-optimized frames", len(dest)))
 	log.Info(fmt.Sprintf("Current configuration:\n  - Width: %v\n  - Height: %v\n  - Iterations: %v\n  - TextureSize: %v\n  - Framerate: %v",
 		width, height, iterations, textureSize, framerate))
 
@@ -37,155 +32,165 @@ func EncodeGPU(dest []common.VisualData, width, height, iterations, textureSize,
 		log.Info(fmt.Sprintf("Output resolution (will be scaled by ffmpeg): %dx%d", scaledWidth, scaledHeight))
 	}
 
-	pr, pw := io.Pipe()
-
-	ffmpegArgs := ffmpeg.KwArgs{
-		"f":       "rawvideo",
-		"pix_fmt": "rgb24",
-		"s":       fmt.Sprintf("%dx%d", width, height),
-		"r":       fmt.Sprintf("%d", framerate),
-	}
-
 	outputArgs := getEncoderArgs(encoder, encoderName, gpuType, width, height, needsScaling)
 
-	var ffErr error
-	var wg sync.WaitGroup
-	ffmpegDone := make(chan struct{})
+	pr, pw := io.Pipe()
 
-	wg.Add(1)
+	stride := width * 3
+	pix := make([]uint8, height*stride)
+	for i := range pix {
+		pix[i] = 255
+	}
+
+	errChan := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		if needsScaling {
-			log.Info("FFmpeg process starting with GPU encoding and automatic scaling...")
-		} else {
-			log.Info("FFmpeg process starting with GPU encoding...")
-		}
-
-		cmd := ffmpeg.Input("pipe:0", ffmpegArgs).
+		err := ffmpeg.Input("pipe:0", ffmpeg.KwArgs{
+			"f":                 "rawvideo",
+			"pix_fmt":           "rgb24",
+			"s":                 fmt.Sprintf("%dx%d", width, height),
+			"r":                 fmt.Sprintf("%d", framerate),
+			"thread_queue_size": "1024", // Buffer for high-speed input
+		}).
 			Output(filename, outputArgs).
 			OverWriteOutput().
-			WithInput(pr)
-
-		if debug {
-			ffErr = cmd.WithOutput(os.Stdout, os.Stderr).Run()
-		} else {
-			ffErr = cmd.Run()
-		}
-
-		if ffErr != nil {
-			log.Error(fmt.Sprintf("FFmpeg error: %v", ffErr))
-		} else {
-			log.Info("FFmpeg process completed successfully")
-		}
-		close(ffmpegDone)
+			Silent(false).
+			ErrorToStdOut().
+			WithInput(pr).
+			Run()
+		errChan <- err
 	}()
 
-	time.Sleep(2 * time.Second)
+	batchSize := iterations
+	totalFrames := (len(dest) + batchSize - 1) / batchSize
 
-	// Writer: produce frames and write to ffmpeg stdin (pw)
-	writeErr := (func() error {
-		defer func() {
-			_ = pw.Close()
-		}()
+	for i := 0; i < len(dest); i += batchSize {
+		end := i + batchSize
+		if end > len(dest) {
+			end = len(dest)
+		}
+		batch := dest[i:end]
 
-		batchSize := iterations
-		frameIndex := 0
-		totalFrames := (len(dest) + batchSize - 1) / batchSize
+		renderTimer := time.Now()
+		for _, block := range batch {
+			tex, ok := getRawTexture(block.BlockTexture)
+			if !ok {
+				continue
+			}
+			// Convert RGBA -> RGB24 (255,255,255)
+			targetX := int(block.X) * textureSize
+			targetY := int(block.Y) * textureSize
 
-		for i := 0; i < len(dest); i += batchSize {
-			select {
-			case <-ffmpegDone:
-				if ffErr != nil {
-					return fmt.Errorf("ffmpeg exited before frame %d: %w", frameIndex, ffErr)
+			texWidth := tex.Rect.Dx()
+			texHeight := tex.Rect.Dy()
+
+			for row := 0; row < texHeight; row++ {
+				canvasRowStart := (targetY+row)*stride + (targetX * 3)
+				texRowStart := row * tex.Stride
+
+				// SB check
+				if canvasRowStart >= 0 && canvasRowStart+(texWidth*3) <= len(pix) {
+					for col := 0; col < texWidth; col++ {
+						cIdx := canvasRowStart + (col * 3)
+						tIdx := texRowStart + (col * 4)
+
+						// Copy R, G, B
+						pix[cIdx] = tex.Pix[tIdx]
+						pix[cIdx+1] = tex.Pix[tIdx+1]
+						pix[cIdx+2] = tex.Pix[tIdx+2]
+					}
 				}
-				return fmt.Errorf("ffmpeg exited before frame %d", frameIndex)
-			default:
 			}
-
-			timer := time.Now()
-			end := i + batchSize
-			if end > len(dest) {
-				end = len(dest)
-			}
-			batch := dest[i:end]
-
-			img := frameCreate(&batch, imgTmp, width, height, textureSize, &frameBuffer)
-			if img == nil {
-				return fmt.Errorf("render returned nil image at frame %d", frameIndex)
-			}
-
-			imgTmp = &img
-
-			// Use the pre-filled frameBuffer from frameCreateBuffered
-			log.Debug("Buffer check: %v", len(frameBuffer))
-			n, err := pw.Write(frameBuffer)
-			if err != nil {
-				return fmt.Errorf("writing to ffmpeg pipe failed after %d bytes at frame %d: %w", n, frameIndex, err)
-			}
-
-			frameIndex++
-			progress := float64(frameIndex) / float64(totalFrames) * 100
-			log.Info("Rendered frame %d/%d (%.1f%%) in %v",
-				frameIndex, totalFrames, progress, time.Since(timer))
 		}
+		log.Infof("Frame Render: %v", time.Since(renderTimer))
 
-		log.Info("All frames written to pipe successfully")
-		return nil
-	})()
-
-	wg.Wait()
-
-	if ffErr != nil {
-		if writeErr != nil {
-			return fmt.Errorf("ffmpeg error: %w; write error: %v", ffErr, writeErr)
+		pipeTimer := time.Now()
+		if _, err := pw.Write(pix); err != nil {
+			return fmt.Errorf("ffmpeg pipe broken: %w", err)
 		}
-		return fmt.Errorf("ffmpeg error: %w", ffErr)
-	}
-	if writeErr != nil {
-		return fmt.Errorf("write error: %w", writeErr)
+		log.Infof("Pipe Write: %v", time.Since(pipeTimer))
+
+		if (i/batchSize)%100 == 0 {
+			log.Infof("Progress: %d/%d frames", (i/batchSize)+1, totalFrames)
+		}
 	}
 
-	log.Info("Video rendering completed successfully")
-	verifyVideoFile(filename)
-
-	return nil
+	err := pw.Close()
+	if err != nil {
+		log.Errorf("Error while closing pipe: %v", err.Error())
+	}
+	return <-errChan
 }
 
 func GeneratePhotoLocal(dest []common.VisualData, width, height, textureSize int, filename string) error {
-	log.Info(fmt.Sprintf("Current configuration:\n  - Width: %v\n  - Height: %v\n  - TextureSize: %v",
-		width, height, textureSize))
+	log.Info(fmt.Sprintf("Generating high-res photo:\n  - Resolution: %dx%d\n  - Texture Size: %v", width, height, textureSize))
 
-	log.Info("Removing old blocks with older timestamps, current: %v elems", len(dest))
+	// 1. Data Cleanup (CPU bound)
+	log.Infof("Cleaning up overlapping blocks, initial count: %v", len(dest))
 	removeOldData(&dest)
-	log.Info("Current size of data: %v elems", len(dest))
-	im := frameCreate(&dest, nil, width, height, textureSize, nil)
+	log.Infof("Optimized count: %v", len(dest))
 
+	// 2. Initialize the Canvas (RGBA buffer)
+	// We create a fresh RGBA image for the photo.
+	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	// OPTIONAL: Fill background with white or a default texture
+	// If you want a background, you can fastBlit a 'white_concrete' texture in a loop here.
+	// For now, it defaults to transparent/black.
+
+	// 3. Render Phase: The "Fast-Blit" loop
+	start := time.Now()
+	for _, block := range dest {
+		tex, ok := getRawTexture(block.BlockTexture)
+		if !ok {
+			// Subtly log missing textures without spamming
+			continue
+		}
+
+		// Map block coordinates to pixel coordinates
+		posX := int(block.X) * textureSize
+		posY := int(block.Y) * textureSize
+
+		fastBlit(canvas, tex, posX, posY)
+	}
+	log.Successf("Canvas rendered in %v", time.Since(start))
+
+	// 4. Encode to File
 	f, err := os.Create(filename)
 	if err != nil {
-		log.Error("Error while creating file: %v", err.Error())
+		return fmt.Errorf("could not create file: %w", err)
+	}
+	defer f.Close()
+
+	// Using the standard library PNG encoder for the final output
+	if err = png.Encode(f, canvas); err != nil {
+		return fmt.Errorf("png encoding failed: %w", err)
 	}
 
-	if err = png.Encode(f, im); err != nil {
-		log.Fatal("Error while encoding png file: %v", err.Error())
-	}
-	if err = f.Close(); err != nil {
-		log.Error("Error while closing file: %v", err.Error())
-	}
+	log.Successf("Photo saved to: %s", filename)
 	return nil
 }
 
-// verifyVideoFile checks if the video file is valid
+// verifyVideoFile uses ffprobe to ensure the GPU encoder produced a valid stream
 func verifyVideoFile(filename string) {
-	// Use ffprobe to check the video
-	log.Notice(fmt.Sprintf("Verifying file %s via ffprobe (this may take a bit)", filename))
-	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0",
-		"-count_frames", "-show_entries", "stream=width,height,nb_frames,codec_name",
-		"-of", "csv=p=0", filename)
+	log.Notice(fmt.Sprintf("Running ffprobe verification on %s", filename))
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("ffprobe failed: %v, output: %s", err, string(output))
+	args := []string{
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height,nb_frames,codec_name",
+		"-of", "default=noprint_wrappers=1",
+		filename,
 	}
 
-	log.Info(fmt.Sprintf("Video verification details: %s", string(output)))
+	cmd := exec.Command("ffprobe", args...)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		log.Errorf("Verification Failed! ffprobe reported an error: %v", err)
+		log.Debugf("ffprobe output: %s", string(output))
+		return
+	}
+
+	stats := strings.ReplaceAll(string(output), "\n", " | ")
+	log.Successf("Video Verified: %s", stats)
 }

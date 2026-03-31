@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -36,12 +35,15 @@ func main() {
 	framerate := flag.Int("framerate", 24, "Framerate (default 24)")
 	localMode := flag.String("local-mode", "", "Local mode (specify .sql file to load)")
 	photo := flag.Bool("photo", false, "Generate a photo of current timelapse only")
+	local := flag.Bool("localDB", false, "Use local DB")
 	debug := flag.Bool("debug", false, "Debug mode")
 
+	databaseSource := flag.String("database-source", "", "Database location (mysql format DB supported)")
 	databaseIp := flag.String("database-ip", "", "IP address of database with port")
 	databaseUser := flag.String("database-user", "", "Database user")
 	databasePassword := flag.String("database-password", "", "Database password")
 	databaseName := flag.String("database-name", "", "Database name")
+	databaseTable := flag.String("database-table", "", "Database table")
 
 	flag.Parse()
 	if *filename == "" {
@@ -50,23 +52,29 @@ func main() {
 		// do NOT show stacktrace in case of 0 flags
 		os.Exit(1)
 	}
-	preFilter(*width, *height, *iterations, *textureSize, *framerate, *filename, *localMode, *databaseIp, *databaseUser, *databasePassword, *databaseName, *debug, *photo)
+
+	err := graphics.LoadTextureAtlas("assets")
+	if err != nil {
+		log.Fatalf("Could not load textures: %v", err)
+	}
+
+	preFilter(*width, *height, *iterations, *textureSize, *framerate, *filename, *localMode, *databaseSource, *databaseIp, *databaseUser, *databasePassword, *databaseName, *databaseTable, *local, *debug, *photo)
 }
 
-func preFilter(width, height, iterations, textureSize, framerate int, filename, localMode, databaseIp, databaseUser, databasePassword, databaseName string, debug, photo bool) {
+func preFilter(width, height, iterations, textureSize, framerate int, filename, localMode, databaseSource, databaseIp, databaseUser, databasePassword, databaseName, databaseTable string, local, debug, photo bool) {
 	log.Info("Running pre config...")
 	timer := time.Now()
 	switch localMode {
 	case "":
-		if err := normalModeSetup(width, height, iterations, textureSize, framerate, filename, databaseIp, databaseUser, databasePassword, databaseName, photo, debug); err != nil {
-			log.Fatal("Error during executing normalMode generation:", err)
+		if err := normalModeSetup(width, height, iterations, textureSize, framerate, filename, databaseSource, databaseIp, databaseUser, databasePassword, databaseName, databaseTable, photo, local, debug); err != nil {
+			log.Fatalf("Error during executing normalMode generation:", err)
 		}
 	default:
 		if err := localModeSetup(width, height, iterations, textureSize, framerate, filename, localMode, photo, debug); err != nil {
-			log.Fatal("Error during executing localMode generation:", err)
+			log.Fatalf("Error during executing localMode generation:", err)
 		}
 	}
-	log.Success("Application finished in %v", time.Since(timer))
+	log.Successf("Application finished in %v", time.Since(timer))
 }
 
 // TODO: FYI. this mode assumes the db name is default and table PB. why? simple. The plugin that comes along for MC is using table PB
@@ -98,7 +106,7 @@ func localModeSetup(width, height, iterations, textureSize, framerate int, filen
 		y, _ := strconv.ParseInt(values[2], 10, 64)
 		blocks = append(blocks, common.VisualData{Time: timestamp, X: x, Y: y, BlockTexture: strings.ToLower(values[3]) + ".png"})
 	}
-	log.Info("Loaded %d raw data schemas. Loading graphics", len(blocks))
+	log.Infof("Loaded %d raw data schemas. Loading graphics", len(blocks))
 	defer func() {
 		log.Info("Purging buffer")
 		blocks = nil
@@ -109,23 +117,22 @@ func localModeSetup(width, height, iterations, textureSize, framerate int, filen
 	return graphics.EncodeGPU(blocks, width, height, iterations, textureSize, framerate, filename, debug)
 }
 
-func normalModeSetup(width, height, iterations, textureSize, framerate int, filename, databaseIp, databaseUser, databasePassword, databaseName string, photo, debug bool) error {
+func normalModeSetup(width, height, iterations, textureSize, framerate int, filename, databaseSource, databaseIp, databaseUser, databasePassword, databaseName, databaseTable string, photo, local, debug bool) error {
 	log.Info("Running normal mode")
 	log.Notice("Issues may occur if DB fails. This method is still under development!")
-	db.Init(databaseIp, databaseUser, databasePassword, databaseName)
+	db.Init(databaseSource, databaseIp, databaseUser, databasePassword, databaseName, local)
 	defer db.Close()
-	num, _ := db.GetMaxCount()
+	num, _ := db.GetMaxCount(databaseTable)
 	var data []common.VisualData
-	log.Info("Current db record count is %d", num)
-	log.Info("Loading data in 1000 record batches...")
-	for i := 0; i <= num; i += 1000 {
-		sub := db.GetData(i)
+	log.Infof("Current db record count is %d", num)
+	log.Info("Loading data in 8192 record batches...")
+	for i := 0; i <= num; i += 8192 {
+		sub := db.GetData(databaseTable, i)
 		data = append(data, *sub...)
-		runtime.GC()
-		log.Info("Parsed %v out of %v", len(data), num)
-		num, _ = db.GetMaxCount() // to keep track of NEW records
+		log.Infof("Parsed %v out of %v", len(data), num)
+		num, _ = db.GetMaxCount(databaseTable) // to keep track of NEW records
 	}
-	log.Info("Loaded %d raw data schemas. Loading graphics", len(data))
+	log.Infof("Loaded %d raw data schemas. Loading graphics", len(data))
 	if photo {
 		return graphics.GeneratePhotoLocal(data, width, height, textureSize, filename)
 	}

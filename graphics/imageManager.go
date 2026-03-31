@@ -4,147 +4,77 @@ import (
 	"Timelapse-PixelBattle/common"
 	"fmt"
 	"image"
-	"image/png"
+	"image/draw"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/vovamod/utils/log"
-
-	"github.com/fogleman/gg"
 )
 
-var textureCache sync.Map
+var textureCacheRaw sync.Map
 
-// NON cached/buffered func-s
-func loadImage(path string) (image.Image, error) {
-	file, err := os.Open(path)
+func LoadTextureAtlas(assetPath string) error {
+	files, err := os.ReadDir(assetPath)
 	if err != nil {
-		return nil, err
-	}
-	defer func(file *os.File) {
-		err = file.Close()
-		if err != nil {
-			log.Info("Error closing file: ", err)
-		}
-	}(file)
-	var img image.Image
-	img, err = png.Decode(file)
-	if err != nil {
-		return nil, err
-	}
-	return img, nil
-}
-
-// imageToRGB converts an image to RGB24 byte array (no alpha)
-func imageToRGB(img image.Image, imType int, buffer *[]byte) {
-	bounds := img.Bounds()
-	width, height := bounds.Max.X, bounds.Max.Y
-
-	if len(*buffer) != 0 {
-		var iBuf []byte
-		iBuf = *buffer
-		index := 0
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			for x := bounds.Min.X; x < bounds.Max.X; x++ {
-				r, g, b, _ := img.At(x, y).RGBA()
-				iBuf[index] = uint8(r >> 8)
-				iBuf[index+1] = uint8(g >> 8)
-				iBuf[index+2] = uint8(b >> 8)
-				index += 3
-			}
-		}
-		*buffer = iBuf
-		return
+		return err
 	}
 
-	if imType == 24 {
-		rgb := make([]byte, width*height*4) // 4 bytes per pixel (RGBA)
-		index := 0
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			for x := bounds.Min.X; x < bounds.Max.X; x++ {
-				r, g, b, a := img.At(x, y).RGBA()
-				// Convert from uint32 to uint8 (maybe... there IS a better way)
-				rgb[index] = uint8(r >> 8)
-				rgb[index+1] = uint8(g >> 8)
-				rgb[index+2] = uint8(b >> 8)
-				rgb[index+3] = uint8(a >> 8)
-				index += 4
-			}
-		}
-		*buffer = rgb
-		return
-	}
-
-	rgb := make([]byte, width*height*3) // 3 byte per pixel
-	index := 0
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, _ := img.At(x, y).RGBA()
-			rgb[index] = uint8(r >> 8)
-			rgb[index+1] = uint8(g >> 8)
-			rgb[index+2] = uint8(b >> 8)
-			index += 3
-		}
-	}
-	*buffer = rgb
-	return
-}
-
-// Wrapper on top of loadImage
-func getCachedImage(path string) (*image.Image, error) {
-	// Check if texture is already cached
-	if tex, exists := textureCache.Load(path); exists {
-		i := tex.(image.Image)
-		return &i, nil
-	}
-
-	// Load the texture
-	tex, err := loadImage(path)
-	if err != nil {
-		return nil, err
-	}
-
-	// Store it in the cache
-	textureCache.Store(path, tex)
-	return &tex, nil
-}
-
-func frameCreate(blocks *[]common.VisualData, im *image.Image, width, height, textureSize int, frameBuffer *[]byte) image.Image {
-	var dc *gg.Context
-	if im != nil {
-		dc = gg.NewContextForImage(*im)
-	} else {
-		texture, err := getCachedImage("assets/white_concrete.png")
-		if err != nil {
-			log.Warn(fmt.Sprintf("Could not load background texture: %v", err))
-			dc = gg.NewContext(width, height)
-			dc.SetRGB(1, 1, 1)
-			dc.Clear()
-		} else {
-			dc = gg.NewContext(width, height)
-			for x := 0; x < width; x += textureSize {
-				for y := 0; y < height; y += textureSize {
-					dc.DrawImage(*texture, x, y)
-				}
-			}
-		}
-	}
-
-	textureSize64 := int64(textureSize)
-	for _, block := range *blocks {
-		texture, err := getCachedImage("assets/" + block.BlockTexture)
-		if err != nil {
-			log.Warn(fmt.Sprintf("Error loading texture %s: %v", block.BlockTexture, err))
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".png") {
 			continue
 		}
-		dc.DrawImage(*texture, int(block.X*textureSize64), int(block.Y*textureSize64))
+		var f *os.File
+		var img image.Image
+		f, err = os.Open(assetPath + "/" + file.Name())
+		if err != nil {
+			continue
+		}
+
+		img, _, err = image.Decode(f)
+		if err != nil {
+			log.Errorf("Failed to decode %s: %v", file.Name(), err)
+			continue
+		}
+		err = f.Close()
+		if err != nil {
+			log.Errorf("Failed to close %s: %v", file.Name(), err)
+			return err
+		}
+
+		bounds := img.Bounds()
+		rgba := image.NewRGBA(bounds)
+		draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+
+		textureCacheRaw.Store(file.Name(), &common.Texture{
+			Pix:    rgba.Pix,
+			Stride: rgba.Stride,
+			Rect:   bounds,
+		})
 	}
-	img := dc.Image()
-	// buffered
-	if frameBuffer != nil {
-		imageToRGB(img, 0, frameBuffer)
+	log.Success("Texture Atlas loaded into memory.")
+	return nil
+}
+
+func getRawTexture(name string) (*common.Texture, bool) {
+	if val, ok := textureCacheRaw.Load(name); ok {
+		return val.(*common.Texture), true
 	}
-	return dc.Image()
+	return nil, false
+}
+
+func fastBlit(canvas *image.RGBA, tex *common.Texture, x, y int) {
+	paintWidth := tex.Rect.Dx() * 4 // 4 bytes (RGBA)
+
+	for row := 0; row < tex.Rect.Dy(); row++ {
+		canvasOffset := (y+row)*canvas.Stride + (x * 4)
+		texOffset := row * tex.Stride
+
+		// OOB CHECK U DUMBSHIT
+		if canvasOffset+paintWidth <= len(canvas.Pix) {
+			copy(canvas.Pix[canvasOffset:canvasOffset+paintWidth], tex.Pix[texOffset:texOffset+paintWidth])
+		}
+	}
 }
 
 func removeOldData(data *[]common.VisualData) {

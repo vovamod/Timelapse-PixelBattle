@@ -18,6 +18,7 @@ func getGPUInfo() (string, bool) {
 	cmd := exec.Command("sh", "-c", "lspci | grep -i nvidia")
 	if output, err := cmd.Output(); err == nil && len(output) > 0 {
 		discrete = "nvidia"
+		return discrete, false
 	}
 
 	// AMD
@@ -37,14 +38,13 @@ func getGPUInfo() (string, bool) {
 		integrated = "intel_integrated"
 	}
 
-	// Priority: integrated first
-	if integrated != "" {
-		return integrated, true
-	}
-
 	// Otherwise return discrete
 	if discrete != "" {
 		return discrete, false
+	}
+	// Priority: integrated first
+	if integrated != "" {
+		return integrated, true
 	}
 
 	return "unknown", false
@@ -54,7 +54,7 @@ func getGPUInfo() (string, bool) {
 func getMaxResolution(gpuType string) (int, int) {
 	switch gpuType {
 	case "nvidia":
-		return 8192, 8192 // H264
+		return 4096, 4096 // H264
 	case "amd_discrete":
 		return 4096, 4096
 	case "amd_integrated":
@@ -125,6 +125,7 @@ func getGPUEncoder(width, height int) (string, string, string) {
 			codec    string
 			checkCmd string
 		}{
+			{"nvenc_hevc", "hevc_nvenc", "ffmpeg -hide_banner -encoders | grep hevc_nvenc"},
 			{"nvenc", "h264_nvenc", "ffmpeg -hide_banner -encoders | grep h264_nvenc"},
 		}
 	case "intel_integrated":
@@ -161,9 +162,8 @@ func getGPUEncoder(width, height int) (string, string, string) {
 	return "libx264", "libx264", gpuType
 }
 
-func getEncoderArgs(encoder string, encoderName string, gpuType string, width, height int, useScaling bool) ffmpeg.KwArgs {
+func getEncoderArgs(encoder, encoderName, gpuType string, width, height int, useScaling bool) ffmpeg.KwArgs {
 	baseArgs := ffmpeg.KwArgs{
-		"pix_fmt":  "yuv420p",
 		"movflags": "faststart",
 	}
 	targetWidth, targetHeight := width, height
@@ -172,27 +172,27 @@ func getEncoderArgs(encoder string, encoderName string, gpuType string, width, h
 	}
 
 	switch encoderName {
-	case "nvenc":
+	case "nvenc", "nvenc_hevc":
 		baseArgs["c:v"] = encoder
 		baseArgs["preset"] = "p4"
 		baseArgs["cq"] = "23"
 		baseArgs["rc"] = "vbr"
 		if useScaling {
-			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos", targetWidth, targetHeight)
+			baseArgs["vf"] = fmt.Sprintf("format=nv12,hwupload_cuda,scale_cuda=w=%d:h=%d:format=nv12", targetWidth, targetHeight)
 		}
 	case "amf":
 		baseArgs["c:v"] = encoder
 		baseArgs["quality"] = "quality"
 		baseArgs["profile"] = "high"
 		if useScaling {
-			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos", targetWidth, targetHeight)
+			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos,format=yuv420p", targetWidth, targetHeight)
 		}
 	case "qsv":
 		baseArgs["c:v"] = encoder
 		baseArgs["preset"] = "quality"
 		baseArgs["profile"] = "high"
 		if useScaling {
-			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos", targetWidth, targetHeight)
+			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos,format=yuv420p", targetWidth, targetHeight)
 		}
 	case "vaapi":
 		baseArgs["c:v"] = encoder
@@ -207,6 +207,5 @@ func getEncoderArgs(encoder string, encoderName string, gpuType string, width, h
 		baseArgs["preset"] = "medium"
 		baseArgs["crf"] = "23"
 	}
-
 	return baseArgs
 }
