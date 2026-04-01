@@ -9,6 +9,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.38
 	github.com/u2takey/ffmpeg-go v0.5.0
 	github.com/vovamod/utils v0.1.7
+	golang.org/x/image v0.38.0
 	modernc.org/sqlite v1.48.0
 )
 

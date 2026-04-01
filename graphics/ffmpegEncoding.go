@@ -164,9 +164,7 @@ func checkEncoderSupport(codec string) bool {
 }
 
 func getEncoderArgs(encoder, encoderName, gpuType string, width, height int, useScaling bool) ffmpeg.KwArgs {
-	baseArgs := ffmpeg.KwArgs{
-		"movflags": "faststart",
-	}
+	baseArgs := ffmpeg.KwArgs{}
 	targetWidth, targetHeight := width, height
 	if useScaling {
 		targetWidth, targetHeight = calculateScaledDimensions(width, height, gpuType)
@@ -183,7 +181,7 @@ func getEncoderArgs(encoder, encoderName, gpuType string, width, height int, use
 		baseArgs["color_primaries"] = "bt709"
 		baseArgs["color_trc"] = "bt709"
 		if useScaling {
-			baseArgs["vf"] = fmt.Sprintf("format=yuv444p,hwupload_cuda,scale_cuda=w=%d:h=%d:format=yuv444p:interp_algo=nearest", targetWidth, targetHeight) //baseArgs["vf"] = fmt.Sprintf("scale=in_range=full:out_range=full,format=nv12,hwupload_cuda,scale_cuda=w=%d:h=%d:format=nv12", targetWidth, targetHeight)
+			baseArgs["vf"] = fmt.Sprintf("format=nv12,hwupload_cuda,scale_cuda=w=%d:h=%d:interp_algo=nearest", targetWidth, targetHeight)
 		}
 	case "amf":
 		baseArgs["c:v"] = encoder
