@@ -2,7 +2,6 @@ package graphics
 
 import (
 	"Timelapse-PixelBattle/common"
-	"fmt"
 	"image"
 	"image/draw"
 	"os"
@@ -28,6 +27,7 @@ func LoadTextureAtlas(assetPath string) error {
 		var img image.Image
 		f, err = os.Open(assetPath + "/" + file.Name())
 		if err != nil {
+			log.Errorf("Error during reading texture file: %v", err)
 			continue
 		}
 
@@ -75,33 +75,4 @@ func fastBlit(canvas *image.RGBA, tex *common.Texture, x, y int) {
 			copy(canvas.Pix[canvasOffset:canvasOffset+paintWidth], tex.Pix[texOffset:texOffset+paintWidth])
 		}
 	}
-}
-
-func removeOldData(data *[]common.VisualData) {
-	if data == nil || len(*data) == 0 {
-		return
-	}
-
-	latest := make(map[string]common.VisualData, len(*data))
-	for _, v := range *data {
-		key := fmt.Sprintf("%d:%d", v.X, v.Y)
-		if prev, ok := latest[key]; !ok || v.Time.After(prev.Time) {
-			latest[key] = v
-		}
-	}
-
-	write := 0
-	seen := make(map[string]bool, len(latest))
-	for _, v := range *data {
-		key := fmt.Sprintf("%d:%d", v.X, v.Y)
-		if seen[key] {
-			continue
-		}
-		if newest, ok := latest[key]; ok && newest.Time.Equal(v.Time) {
-			(*data)[write] = v
-			write++
-			seen[key] = true
-		}
-	}
-	*data = (*data)[:write]
 }
