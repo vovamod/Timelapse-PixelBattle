@@ -1,21 +1,25 @@
 package db
 
 import (
-	"Timelapse-PixelBattle/common"
+	"Timelapse-PixelBattle/entities"
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 
-	"github.com/vovamod/utils/log"
-
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/vovamod/utils/log"
+	_ "modernc.org/sqlite"
 )
 
 var (
-	client driver.Conn
+	clientCH    driver.Conn
+	clientLocal *sql.DB
+	local       = false
 )
 
 func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName string) (driver.Conn, error) {
@@ -42,9 +46,6 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 				var d net.Dialer
 				return d.DialContext(ctx, "tcp", addr)
 			},
-			Debugf: func(format string, v ...interface{}) {
-				log.Info(format, v)
-			},
 			TLS: &tls.Config{
 				InsecureSkipVerify: true,
 			},
@@ -64,73 +65,137 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 	if err = conn.Ping(ctx); err != nil {
 		var exception *clickhouse.Exception
 		if errors.As(err, &exception) {
-			log.Info("Exception [%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
+			log.Errorf("Exception [%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
 		}
 		return nil, err
 	}
 	return conn, nil
 }
 
-func Init(databaseIp, databaseUser, databasePassword, databaseName string) {
-	conn, err := ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName)
-	if err != nil {
-		log.Info(err.Error())
-		panic(err)
+func Init(databaseSource, databaseIp, databaseUser, databasePassword, databaseName string, localOnly bool) {
+	local = localOnly
+	if localOnly == true {
+		conn, err := sql.Open("sqlite", databaseSource)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+		clientLocal = conn
+	} else {
+		conn, err := ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+		clientCH = conn
 	}
-	client = conn
 }
 
 func Close() {
-	err := client.Close()
-	if err != nil {
-		log.Error("Error closing clickhouse client: %s", err.Error())
+	if local != true {
+		err := clientCH.Close()
+		if err != nil {
+			log.Errorf("Error closing clickhouse client: %s", err.Error())
+		}
+	} else {
+		err := clientLocal.Close()
+		if err != nil {
+			log.Errorf("Error closing sql client: %s", err.Error())
+		}
 	}
 }
 
-func GetData(offset int) *[]common.VisualData {
-	var off []common.VisualData
-	query := `SELECT timestamp, x, y, c FROM PB ORDER BY timestamp LIMIT 1000 OFFSET ?`
-
-	rows, err := client.Query(context.Background(), query, offset*1000)
-	if err != nil {
-		log.Info(err.Error())
-		return &off
+func GetData(playername *string, table string, offset int) *[]entities.VisualData {
+	var singleData entities.VisualData
+	var preparedData []entities.VisualData
+	var rowsCh driver.Rows
+	var rowsL *sql.Rows
+	var err error
+	query := fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s`, table)
+	if playername != nil {
+		query = fmt.Sprintf("%s WHERE owner = '%s'", query, *playername)
 	}
-	defer func(rows driver.Rows) {
-		err = rows.Close()
+	query = fmt.Sprintf("%s ORDER BY timestamp LIMIT 1000 OFFSET ?", query)
+	if local != true {
+		rowsCh, err = clientCH.Query(context.Background(), query, offset)
 		if err != nil {
 			log.Info(err.Error())
+			return new([]entities.VisualData)
 		}
-	}(rows)
-
-	// Prepare a slice to hold the results
-	var data []common.VisualData
-	// Loop over the rows and scan them into the VisualData struct. (at least not direct []byte impl like previous time)
-	for rows.Next() {
-		var vd common.VisualData
-		if err = rows.Scan(&vd.Time, &vd.X, &vd.Y, &vd.BlockTexture); err != nil {
+		defer func(rows driver.Rows) {
+			err = rows.Close()
+			if err != nil {
+				log.Info(err.Error())
+			}
+		}(rowsCh)
+	} else {
+		rowsL, err = clientLocal.Query(query, offset)
+		if err != nil {
 			log.Info(err.Error())
-			return &off
+			return new([]entities.VisualData)
 		}
-		vd.BlockTexture = strings.ToLower(vd.BlockTexture) + ".png"
-		data = append(data, vd)
+		defer func(rows *sql.Rows) {
+			err = rows.Close()
+			if err != nil {
+				log.Info(err.Error())
+			}
+		}(rowsL)
 	}
 
-	// Check for any errors encountered during iteration
-	if err = rows.Err(); err != nil {
-		log.Info(err.Error())
-		return &off
+	if local != true {
+		for rowsCh.Next() {
+			if err = rowsCh.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
+				log.Info(err.Error())
+				return new([]entities.VisualData)
+			}
+			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
+			preparedData = append(preparedData, singleData)
+			singleData = entities.VisualData{} // clean this mf
+		}
+
+		if err = rowsCh.Err(); err != nil {
+			log.Info(err.Error())
+			return new([]entities.VisualData)
+		}
+	} else {
+		if rowsL == nil {
+			log.Error("Exception! No rows in DB or client failed?")
+			return new([]entities.VisualData)
+		}
+		for rowsL.Next() {
+			if err = rowsL.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
+				log.Info(err.Error())
+				return new([]entities.VisualData)
+			}
+			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
+			preparedData = append(preparedData, singleData)
+			singleData = entities.VisualData{} // clean this mf
+		}
+
+		// Check for any errors encountered during iteration
+		if err = rowsL.Err(); err != nil {
+			log.Info(err.Error())
+			return new([]entities.VisualData)
+		}
 	}
 
-	return &data
+	return &preparedData
 }
 
-func GetMaxCount() (int, error) {
-	query := `SELECT COUNT(*) FROM PB`
+func GetMaxCount(table string, playername *string) (int, error) {
 	var totalRecords uint64
-	if err := client.QueryRow(context.Background(), query).Scan(&totalRecords); err != nil {
-		return 0, err
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)
+	if playername != nil {
+		query = fmt.Sprintf("%s WHERE owner = '%s'", query, *playername)
 	}
-
+	if local != true {
+		if err := clientCH.QueryRow(context.Background(), query).Scan(&totalRecords); err != nil {
+			return 0, err
+		}
+	} else {
+		// 01.04.2026 - If someone will touch this. Know, I fucking hate sqlite with all my soul, I WISH TO BURN THIS SHIT BECAUSE I CANNOT USE ? as table name... ONLY F*CKING VALUES allowed.
+		if err := clientLocal.QueryRow(query).Scan(&totalRecords); err != nil {
+			log.Errorf("Error getting max count: %s", err.Error())
+			return 0, err
+		}
+	}
 	return int(totalRecords), nil
 }
