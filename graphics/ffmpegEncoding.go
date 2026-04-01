@@ -1,8 +1,14 @@
 package graphics
 
 import (
+	"Timelapse-PixelBattle/common"
+	"Timelapse-PixelBattle/entities"
+	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/vovamod/utils/log"
@@ -10,51 +16,11 @@ import (
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
 
-// getGPUInfo detects the actual GPU configuration (works on linux only. No Windows support.)
-func getGPUInfo() (string, bool) {
-	var integrated, discrete string
-
-	// NVIDIA (always discrete)
-	cmd := exec.Command("sh", "-c", "lspci | grep -i nvidia")
-	if output, err := cmd.Output(); err == nil && len(output) > 0 {
-		discrete = "nvidia"
-		return discrete, false
-	}
-
-	// AMD
-	cmd = exec.Command("sh", "-c", "lspci | grep -i 'amd\\|ati' | grep -i 'vga\\|3d\\|display'")
-	if output, err := cmd.Output(); err == nil && len(output) > 0 {
-		out := strings.ToLower(string(output))
-		if strings.Contains(out, "radeon") {
-			discrete = "amd_discrete"
-		} else {
-			integrated = "amd_integrated"
-		}
-	}
-
-	// Intel integrated
-	cmd = exec.Command("sh", "-c", "lspci | grep -i intel | grep -i 'vga\\|display'")
-	if output, err := cmd.Output(); err == nil && len(output) > 0 {
-		integrated = "intel_integrated"
-	}
-
-	// Otherwise return discrete
-	if discrete != "" {
-		return discrete, false
-	}
-	// Priority: integrated first
-	if integrated != "" {
-		return integrated, true
-	}
-
-	return "unknown", false
-}
-
 // getMaxResolution - maximum size of h264/x264 encode with vaapi
 func getMaxResolution(gpuType string) (int, int) {
 	switch gpuType {
 	case "nvidia":
-		return 4096, 4096 // H264
+		return 4096, 4096
 	case "amd_discrete":
 		return 4096, 4096
 	case "amd_integrated":
@@ -62,11 +28,10 @@ func getMaxResolution(gpuType string) (int, int) {
 	case "intel_integrated":
 		return 3840, 2160
 	default:
-		return 1920, 1080 // Safe mode
+		return 1920, 1080
 	}
 }
 
-// TODO: some cleanup...
 func calculateScaledDimensions(width, height int, gpuType string) (int, int) {
 	maxWidth, maxHeight := getMaxResolution(gpuType)
 
@@ -80,7 +45,6 @@ func calculateScaledDimensions(width, height int, gpuType string) (int, int) {
 	scaledWidth := int(float64(width) * scale)
 	scaledHeight := int(float64(height) * scale)
 
-	// Standard of YUV420p assumes VALUE%2=true
 	if scaledWidth%2 != 0 {
 		scaledWidth--
 	}
@@ -104,62 +68,99 @@ func minFloat(a, b float64) float64 {
 
 // getGPUEncoder - uses Best GPU encoder IF available for ffmpeg (prime-run can fail.)
 func getGPUEncoder(width, height int) (string, string, string) {
-	gpuType, isIntegrated := getGPUInfo()
-	log.Info(fmt.Sprintf("Detected GPU: %s (integrated: %v)", gpuType, isIntegrated))
+	allGPUs := common.GetAvailableGPUs()
 
-	if isIntegrated && (width > 3840 || height > 2160 || width*height > 8000000) {
-		log.Info("High resolution detected with integrated graphics, using CPU encoder for stability")
-		return "libx264", "libx264", gpuType
+	if len(allGPUs) == 0 {
+		return "libx264", "libx264", "cpu"
 	}
 
-	var encoders []struct {
-		name     string
-		codec    string
-		checkCmd string
+	log.Info("Detected GPUs:")
+	for i, g := range allGPUs {
+		log.Infof("  [%d] %s (%s) - Integrated: %v", i+1, g.Name, g.Vendor, g.IsIntegrated)
+	}
+	log.Info("Select a GPU by number or name (Leave empty for auto-selection):")
+
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	var selectedGPU *entities.GPU
+
+	if input != "" {
+		if idx, err := strconv.Atoi(input); err == nil && idx > 0 && idx <= len(allGPUs) {
+			selectedGPU = &allGPUs[idx-1]
+		} else {
+			for _, g := range allGPUs {
+				if strings.EqualFold(g.Name, input) {
+					selectedGPU = &g
+					break
+				}
+			}
+		}
 	}
 
-	switch gpuType {
+	if selectedGPU != nil {
+		codec, encoder, gpuType := resolveEncoderForGPU(*selectedGPU)
+		log.Successf("User selected: %s. Using encoder: %s", selectedGPU.Name, encoder)
+		return codec, encoder, gpuType
+	}
+
+	log.Info("Proceeding with automated selection...")
+	for _, g := range allGPUs {
+		if g.Vendor == "nvidia" {
+			return resolveEncoderForGPU(g)
+		}
+	}
+
+	for _, g := range allGPUs {
+		if g.Vendor == "amd" && !g.IsIntegrated {
+			return resolveEncoderForGPU(g)
+		}
+	}
+
+	if width <= 3840 && height <= 2160 {
+		for _, g := range allGPUs {
+			if g.IsIntegrated {
+				return resolveEncoderForGPU(g)
+			}
+		}
+	}
+
+	log.Warn("No suitable GPU configuration found, defaulting to CPU")
+	return "libx264", "libx264", "cpu"
+}
+
+func resolveEncoderForGPU(g entities.GPU) (string, string, string) {
+	switch g.Vendor {
 	case "nvidia":
-		encoders = []struct {
-			name     string
-			codec    string
-			checkCmd string
-		}{
-			{"nvenc_hevc", "hevc_nvenc", "ffmpeg -hide_banner -encoders | grep hevc_nvenc"},
-			{"nvenc", "h264_nvenc", "ffmpeg -hide_banner -encoders | grep h264_nvenc"},
+		if checkEncoderSupport("hevc_nvenc") {
+			return "hevc_nvenc", "nvenc_hevc", "nvidia"
 		}
-	case "intel_integrated":
-		encoders = []struct {
-			name     string
-			codec    string
-			checkCmd string
-		}{
-			{"qsv", "h264_qsv", "ffmpeg -hide_banner -encoders | grep h264_qsv"},
-			{"vaapi", "h264_vaapi", "ffmpeg -hide_banner -encoders | grep h264_vaapi"},
+		return "h264_nvenc", "nvenc", "nvidia"
+
+	case "amd":
+		if runtime.GOOS == "windows" {
+			return "h264_amf", "amf", "amd_discrete"
 		}
+		return "h264_vaapi", "vaapi", "amd_discrete"
+
+	case "intel":
+		if checkEncoderSupport("h264_qsv") {
+			return "h264_qsv", "qsv", "intel_integrated"
+		}
+		return "h264_vaapi", "vaapi", "intel_integrated"
+
 	default:
-		encoders = []struct {
-			name     string
-			codec    string
-			checkCmd string
-		}{
-			{"nvenc", "h264_nvenc", "ffmpeg -hide_banner -encoders | grep h264_nvenc"},
-			{"amf", "h264_amf", "ffmpeg -hide_banner -encoders | grep h264_amf"},
-			{"qsv", "h264_qsv", "ffmpeg -hide_banner -encoders | grep h264_qsv"},
-			{"vaapi", "h264_vaapi", "ffmpeg -hide_banner -encoders | grep h264_vaapi"},
-		}
+		return "libx264", "libx264", "cpu"
 	}
+}
 
-	for _, encoder := range encoders {
-		cmd := exec.Command("sh", "-c", encoder.checkCmd)
-		if err := cmd.Run(); err == nil {
-			log.Info(fmt.Sprintf("Using GPU encoder: %s (%s) for %s", encoder.name, encoder.codec, gpuType))
-			return encoder.codec, encoder.name, gpuType
-		}
+func checkEncoderSupport(codec string) bool {
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-encoders")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
 	}
-
-	log.Info("No compatible GPU encoder found, using CPU encoder")
-	return "libx264", "libx264", gpuType
+	return strings.Contains(string(output), codec)
 }
 
 func getEncoderArgs(encoder, encoderName, gpuType string, width, height int, useScaling bool) ffmpeg.KwArgs {
@@ -177,8 +178,12 @@ func getEncoderArgs(encoder, encoderName, gpuType string, width, height int, use
 		baseArgs["preset"] = "p4"
 		baseArgs["cq"] = "23"
 		baseArgs["rc"] = "vbr"
+		baseArgs["color_range"] = "pc"
+		baseArgs["colorspace"] = "bt709"
+		baseArgs["color_primaries"] = "bt709"
+		baseArgs["color_trc"] = "bt709"
 		if useScaling {
-			baseArgs["vf"] = fmt.Sprintf("format=nv12,hwupload_cuda,scale_cuda=w=%d:h=%d:format=nv12", targetWidth, targetHeight)
+			baseArgs["vf"] = fmt.Sprintf("format=yuv444p,hwupload_cuda,scale_cuda=w=%d:h=%d:format=yuv444p:interp_algo=nearest", targetWidth, targetHeight) //baseArgs["vf"] = fmt.Sprintf("scale=in_range=full:out_range=full,format=nv12,hwupload_cuda,scale_cuda=w=%d:h=%d:format=nv12", targetWidth, targetHeight)
 		}
 	case "amf":
 		baseArgs["c:v"] = encoder

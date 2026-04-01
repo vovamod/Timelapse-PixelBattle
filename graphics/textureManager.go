@@ -1,7 +1,7 @@
 package graphics
 
 import (
-	"Timelapse-PixelBattle/common"
+	"Timelapse-PixelBattle/entities"
 	"image"
 	"image/draw"
 	"os"
@@ -46,7 +46,7 @@ func LoadTextureAtlas(assetPath string) error {
 		rgba := image.NewRGBA(bounds)
 		draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
 
-		textureCacheRaw.Store(file.Name(), &common.Texture{
+		textureCacheRaw.Store(file.Name(), &entities.Texture{
 			Pix:    rgba.Pix,
 			Stride: rgba.Stride,
 			Rect:   bounds,
@@ -56,14 +56,14 @@ func LoadTextureAtlas(assetPath string) error {
 	return nil
 }
 
-func getRawTexture(name string) (*common.Texture, bool) {
+func getRawTexture(name string) (*entities.Texture, bool) {
 	if val, ok := textureCacheRaw.Load(name); ok {
-		return val.(*common.Texture), true
+		return val.(*entities.Texture), true
 	}
 	return nil, false
 }
 
-func fastBlit(canvas *image.RGBA, tex *common.Texture, x, y int) {
+func fastBlit(canvas *image.RGBA, tex *entities.Texture, x, y int) {
 	paintWidth := tex.Rect.Dx() * 4 // 4 bytes (RGBA)
 
 	for row := 0; row < tex.Rect.Dy(); row++ {
