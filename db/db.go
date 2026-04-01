@@ -1,7 +1,7 @@
 package db
 
 import (
-	"Timelapse-PixelBattle/common"
+	"Timelapse-PixelBattle/entities"
 	"context"
 	"crypto/tls"
 	"database/sql"
@@ -104,9 +104,9 @@ func Close() {
 	}
 }
 
-func GetData(table string, offset int) *[]common.VisualData {
-	var singleData common.VisualData
-	var preparedData []common.VisualData
+func GetData(table string, offset int) *[]entities.VisualData {
+	var singleData entities.VisualData
+	var preparedData []entities.VisualData
 	var rowsCh driver.Rows
 	var rowsL *sql.Rows
 	var err error
@@ -115,7 +115,7 @@ func GetData(table string, offset int) *[]common.VisualData {
 		rowsCh, err = clientCH.Query(context.Background(), fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s ORDER BY timestamp LIMIT 1000 OFFSET ?`, table), offset*1000)
 		if err != nil {
 			log.Info(err.Error())
-			return new([]common.VisualData)
+			return new([]entities.VisualData)
 		}
 		defer func(rows driver.Rows) {
 			err = rows.Close()
@@ -127,7 +127,7 @@ func GetData(table string, offset int) *[]common.VisualData {
 		rowsL, err = clientLocal.Query(fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s ORDER BY timestamp LIMIT 1000 OFFSET ?`, table), offset)
 		if err != nil {
 			log.Info(err.Error())
-			return new([]common.VisualData)
+			return new([]entities.VisualData)
 		}
 		defer func(rows *sql.Rows) {
 			err = rows.Close()
@@ -141,36 +141,36 @@ func GetData(table string, offset int) *[]common.VisualData {
 		for rowsCh.Next() {
 			if err = rowsCh.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
 				log.Info(err.Error())
-				return new([]common.VisualData)
+				return new([]entities.VisualData)
 			}
 			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
 			preparedData = append(preparedData, singleData)
-			singleData = common.VisualData{} // clean this mf
+			singleData = entities.VisualData{} // clean this mf
 		}
 
 		if err = rowsCh.Err(); err != nil {
 			log.Info(err.Error())
-			return new([]common.VisualData)
+			return new([]entities.VisualData)
 		}
 	} else {
 		if rowsL == nil {
 			log.Error("Exception! No rows in DB or client failed?")
-			return new([]common.VisualData)
+			return new([]entities.VisualData)
 		}
 		for rowsL.Next() {
 			if err = rowsL.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
 				log.Info(err.Error())
-				return new([]common.VisualData)
+				return new([]entities.VisualData)
 			}
 			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
 			preparedData = append(preparedData, singleData)
-			singleData = common.VisualData{} // clean this mf
+			singleData = entities.VisualData{} // clean this mf
 		}
 
 		// Check for any errors encountered during iteration
 		if err = rowsL.Err(); err != nil {
 			log.Info(err.Error())
-			return new([]common.VisualData)
+			return new([]entities.VisualData)
 		}
 	}
 
@@ -185,7 +185,7 @@ func GetMaxCount(table string) (int, error) {
 		}
 	} else {
 		// 01.04.2026 - If someone will touch this. Know, I fucking hate sqlite with all my soul, I WISH TO BURN THIS SHIT BECAUSE I CANNOT USE ? as table name... ONLY F*CKING VALUES allowed.
-		if err := clientLocal.QueryRow(`SELECT COUNT(*) FROM` + table).Scan(&totalRecords); err != nil {
+		if err := clientLocal.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&totalRecords); err != nil {
 			log.Errorf("Error getting max count: %s", err.Error())
 			return 0, err
 		}
