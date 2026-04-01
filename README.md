@@ -1,10 +1,6 @@
 # Timelapse-PixelBattle
 
-Simple tool to render a timelapse / pixel battle video or single photo from pixel placement records. Supports two modes:
-
-* **local mode**: load an SQL dump file (expected `INSERT INTO default.PB ...` lines) and render from it.
-* **normal mode**: connect to a database and read records in batches (table `PB` expected).
-
+Simple tool to render a timelapse / pixel battle video or single photo from pixel placement records.
 ---
 
 ## Prerequisites
@@ -50,16 +46,19 @@ Flags:
 * `--texture-size` (int) — texture size in pixels (default `16`)
 * `--framerate` (int) — video framerate (default `24`)
 * `--filename` (string) — output filename (required)
-* `--local-mode` (string) — path to `.sql` file to load (activates *local mode*)
+* `--local` (bool)
 * `--photo` — generate single photo instead of video (specify in --filename=FILENAME.png)
 * `--debug` — enable debug mode
+*  --playername - Name of player by which the application will filter the data
 
 Database connection flags (used in *normal mode*):
 
-* `--database-ip` (string) — host:port for DB
-* `--database-user` (string)
-* `--database-password` (string)
-* `--database-name` (string)
+* `--db-ip` (string) — host:port for DB
+* `--db-user` (string)
+* `--db-password` (string)
+* `--db-name` (string)
+*  --db-source (string) - path to `.sql` file to load (activates *local mode*)
+*  --db-table (string) - table name
 
 ---
 
@@ -70,13 +69,23 @@ Database connection flags (used in *normal mode*):
 The SQL dump should contain lines like:
 
 ```
-INSERT INTO default.PB timestamp x y c VALUES ('2025-01-01T12:00:00.000000' 12 34 'STONE');
+create table TABLE_NAME_HERE
+(
+    timestamp TIMESTAMP,
+    owner     CHAR(32),
+    x         BIGINT,
+    y         BIGINT,
+    c         CHAR(128)
+);
+
+create index idx_timestamp
+    on TABLE_NAME_HERE (timestamp);
 ```
 
 Run:
 
 ```bash
-./timelapse --local-mode=dump.sql --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
+./timelapse --local --db-source=dump.sql --db-table=TaBLe --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
 ```
 
 For a single photo from the dump:
@@ -85,12 +94,12 @@ For a single photo from the dump:
 ./timelapse --local-mode=dump.sql --filename=photo.png --photo
 ```
 
-### Normal mode (database)
+### Normal mode (db)
 
 Ensure your DB is reachable and contains table `PB` with compatible columns. Example run:
 
 ```bash
-./timelapse --database-ip=127.0.0.1:9000 --database-user=user --database-password=pass --database-name=default --filename=timelapse.mp4
+./timelapse --db-ip=127.0.0.1:9000 --db-table=TaBLe --db-user=user --db-password=pass --db-name=default --filename=timelapse.mp4
 ```
 
 Notes:
