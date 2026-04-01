@@ -66,7 +66,7 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 	if err = conn.Ping(ctx); err != nil {
 		var exception *clickhouse.Exception
 		if errors.As(err, &exception) {
-			log.Infof("Exception [%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
+			log.Errorf("Exception [%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
 		}
 		return nil, err
 	}
@@ -76,11 +76,7 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 func Init(databaseSource, databaseIp, databaseUser, databasePassword, databaseName string, localOnly bool) {
 	local = localOnly
 	if localOnly == true {
-		driverS := "mysql"
-		if strings.HasSuffix(databaseSource, ".db") || strings.HasSuffix(databaseSource, ".sqlite") {
-			driverS = "sqlite"
-		}
-		conn, err := sql.Open(driverS, databaseSource)
+		conn, err := sql.Open("sqlite", databaseSource)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
@@ -90,7 +86,6 @@ func Init(databaseSource, databaseIp, databaseUser, databasePassword, databaseNa
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-
 		clientCH = conn
 	}
 }
@@ -117,7 +112,7 @@ func GetData(table string, offset int) *[]common.VisualData {
 	var err error
 
 	if local != true {
-		rowsCh, err = clientCH.Query(context.Background(), `SELECT timestamp, x, y, c FROM $1 ORDER BY timestamp LIMIT 1000 OFFSET $2`, table, offset*1000)
+		rowsCh, err = clientCH.Query(context.Background(), fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s ORDER BY timestamp LIMIT 1000 OFFSET ?`, table), offset*1000)
 		if err != nil {
 			log.Info(err.Error())
 			return new([]common.VisualData)
@@ -129,7 +124,7 @@ func GetData(table string, offset int) *[]common.VisualData {
 			}
 		}(rowsCh)
 	} else {
-		rowsL, err = clientLocal.Query(fmt.Sprintf(`SELECT timestamp, x, y, c FROM %s ORDER BY timestamp LIMIT 8192 OFFSET %v`, table, offset))
+		rowsL, err = clientLocal.Query(fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s ORDER BY timestamp LIMIT 1000 OFFSET ?`, table), offset)
 		if err != nil {
 			log.Info(err.Error())
 			return new([]common.VisualData)
@@ -144,7 +139,7 @@ func GetData(table string, offset int) *[]common.VisualData {
 
 	if local != true {
 		for rowsCh.Next() {
-			if err = rowsCh.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture); err != nil {
+			if err = rowsCh.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
 				log.Info(err.Error())
 				return new([]common.VisualData)
 			}
@@ -158,8 +153,12 @@ func GetData(table string, offset int) *[]common.VisualData {
 			return new([]common.VisualData)
 		}
 	} else {
+		if rowsL == nil {
+			log.Error("Exception! No rows in DB or client failed?")
+			return new([]common.VisualData)
+		}
 		for rowsL.Next() {
-			if err = rowsL.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture); err != nil {
+			if err = rowsL.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
 				log.Info(err.Error())
 				return new([]common.VisualData)
 			}
@@ -181,11 +180,13 @@ func GetData(table string, offset int) *[]common.VisualData {
 func GetMaxCount(table string) (int, error) {
 	var totalRecords uint64
 	if local != true {
-		if err := clientCH.QueryRow(context.Background(), `SELECT COUNT(*) FROM $1`, table).Scan(&totalRecords); err != nil {
+		if err := clientCH.QueryRow(context.Background(), `SELECT COUNT(*) FROM ?`, table).Scan(&totalRecords); err != nil {
 			return 0, err
 		}
 	} else {
-		if err := clientLocal.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&totalRecords); err != nil {
+		// 01.04.2026 - If someone will touch this. Know, I fucking hate sqlite with all my soul, I WISH TO BURN THIS SHIT BECAUSE I CANNOT USE ? as table name... ONLY F*CKING VALUES allowed.
+		if err := clientLocal.QueryRow(`SELECT COUNT(*) FROM` + table).Scan(&totalRecords); err != nil {
+			log.Errorf("Error getting max count: %s", err.Error())
 			return 0, err
 		}
 	}
