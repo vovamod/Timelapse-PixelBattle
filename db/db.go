@@ -12,7 +12,6 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/vovamod/utils/log"
 	_ "modernc.org/sqlite"
 )
@@ -104,15 +103,19 @@ func Close() {
 	}
 }
 
-func GetData(table string, offset int) *[]entities.VisualData {
+func GetData(playername *string, table string, offset int) *[]entities.VisualData {
 	var singleData entities.VisualData
 	var preparedData []entities.VisualData
 	var rowsCh driver.Rows
 	var rowsL *sql.Rows
 	var err error
-
+	query := fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s`, table)
+	if playername != nil {
+		query = fmt.Sprintf("%s WHERE owner = '%s'", query, *playername)
+	}
+	query = fmt.Sprintf("%s ORDER BY timestamp LIMIT 1000 OFFSET ?", query)
 	if local != true {
-		rowsCh, err = clientCH.Query(context.Background(), fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s ORDER BY timestamp LIMIT 1000 OFFSET ?`, table), offset*1000)
+		rowsCh, err = clientCH.Query(context.Background(), query, offset)
 		if err != nil {
 			log.Info(err.Error())
 			return new([]entities.VisualData)
@@ -124,7 +127,7 @@ func GetData(table string, offset int) *[]entities.VisualData {
 			}
 		}(rowsCh)
 	} else {
-		rowsL, err = clientLocal.Query(fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s ORDER BY timestamp LIMIT 1000 OFFSET ?`, table), offset)
+		rowsL, err = clientLocal.Query(query, offset)
 		if err != nil {
 			log.Info(err.Error())
 			return new([]entities.VisualData)
@@ -177,15 +180,19 @@ func GetData(table string, offset int) *[]entities.VisualData {
 	return &preparedData
 }
 
-func GetMaxCount(table string) (int, error) {
+func GetMaxCount(table string, playername *string) (int, error) {
 	var totalRecords uint64
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)
+	if playername != nil {
+		query = fmt.Sprintf("%s WHERE owner = '%s'", query, *playername)
+	}
 	if local != true {
-		if err := clientCH.QueryRow(context.Background(), `SELECT COUNT(*) FROM ?`, table).Scan(&totalRecords); err != nil {
+		if err := clientCH.QueryRow(context.Background(), query).Scan(&totalRecords); err != nil {
 			return 0, err
 		}
 	} else {
 		// 01.04.2026 - If someone will touch this. Know, I fucking hate sqlite with all my soul, I WISH TO BURN THIS SHIT BECAUSE I CANNOT USE ? as table name... ONLY F*CKING VALUES allowed.
-		if err := clientLocal.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&totalRecords); err != nil {
+		if err := clientLocal.QueryRow(query).Scan(&totalRecords); err != nil {
 			log.Errorf("Error getting max count: %s", err.Error())
 			return 0, err
 		}

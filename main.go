@@ -29,7 +29,8 @@ func main() {
 	filename := flag.String("filename", "", "Filename to save video")
 	framerate := flag.Int("framerate", 24, "Framerate (default 24)")
 	photo := flag.Bool("photo", false, "Generate a photo of current timelapse only")
-	local := flag.Bool("localDB", false, "Use local DB")
+	local := flag.Bool("local", false, "Use local DB")
+	playername := flag.String("playername", "", "Show the timelapse of specified player name")
 	debug := flag.Bool("debug", false, "Debug mode")
 
 	dbSource := flag.String("db-source", "", "db location (file .db)")
@@ -45,7 +46,7 @@ func main() {
 		log.Fatalf("Could not load textures: %v", err)
 	}
 	timer := time.Now()
-	err = setup(*width, *height, *iterations, *textureSize, *framerate, *filename, *dbSource, *dbIp, *dbUser, *dbPassword, *dbName, *dbTable, *local, *debug, *photo)
+	err = setup(*width, *height, *iterations, *textureSize, *framerate, *filename, *playername, *dbSource, *dbIp, *dbUser, *dbPassword, *dbName, *dbTable, *photo, *local, *debug)
 	if err != nil {
 		log.Errorf("Application failed: %v", err)
 		os.Exit(1)
@@ -54,24 +55,23 @@ func main() {
 
 }
 
-func setup(width, height, iterations, textureSize, framerate int, filename, dbSource, dbIp, dbUser, dbPassword, dbName, dbTable string, photo, local, debug bool) error {
+func setup(width, height, iterations, textureSize, framerate int, filename, playername, dbSource, dbIp, dbUser, dbPassword, dbName, dbTable string, photo, local, debug bool) error {
 	log.Info("Running pre config...")
-	log.Notice("Issues may occur if DB fails. This method is still under development!")
 	db.Init(dbSource, dbIp, dbUser, dbPassword, dbName, local)
 	defer db.Close()
-	num, _ := db.GetMaxCount(dbTable)
+	num, _ := db.GetMaxCount(dbTable, &playername)
 	var data []entities.VisualData
 	log.Infof("Current db record count is %d", num)
 	log.Info("Loading data in 1000 record batches...")
 	for i := 0; i <= num; i += 1000 {
-		sub := db.GetData(dbTable, i)
+		sub := db.GetData(&playername, dbTable, i)
 		data = append(data, *sub...)
 		log.CustomStreamf("info", "Parsed %v out of %v", len(data), num)
-		num, _ = db.GetMaxCount(dbTable) // to keep track of NEW records
+		num, _ = db.GetMaxCount(dbTable, &playername) // to keep track of NEW records
 	}
 	log.Infof("Loaded %d raw data schemas. Loading graphics", len(data))
 	if photo {
 		return graphics.GeneratePhotoLocal(data, width, height, textureSize, filename)
 	}
-	return graphics.EncodeGPU(data, width, height, iterations, textureSize, framerate, filename, true, debug)
+	return graphics.EncodeGPU(data, width, height, iterations, textureSize, framerate, filename, &playername, true, debug)
 }

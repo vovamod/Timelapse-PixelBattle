@@ -19,7 +19,7 @@ import (
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
 
-func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSize, framerate int, filename string, renderTime, debug bool) error {
+func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSize, framerate int, filename string, playername *string, renderTime, debug bool) error {
 	uiOffset := 0
 	if renderTime {
 		uiOffset = 200
@@ -126,7 +126,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 			currentFrame := (i / batchSize) + 1
 			ts := batch[len(batch)-1].Time.Format("2006-01-02 15:04")
 
-			drawFooter(pix, width, height, uiOffset, currentFrame, ts)
+			drawFooter(pix, width, height, uiOffset, currentFrame, ts, playername)
 		}
 
 		log.Debugf("Frame prepared: %v", time.Since(renderTimer))
@@ -137,9 +137,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 		}
 		log.Debugf("Pipe Write: %v", time.Since(pipeTimer))
 
-		if (i/batchSize)%100 == 0 {
-			log.Streamf("Progress: %d/%d frames", (i/batchSize)+1, totalFrames)
-		}
+		log.CustomStreamf("info", "Progress: %d/%d frames", (i/batchSize)+1, totalFrames)
 	}
 
 	err := pw.Close()
@@ -209,7 +207,7 @@ func verifyVideoFile(filename string) {
 	log.Successf("Video Verified: %s", stats)
 }
 
-func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string) {
+func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername *string) {
 	stride := w * 3
 	scale := 8
 
@@ -223,6 +221,9 @@ func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string) {
 	leftText := fmt.Sprintf("FRAME: %d", frame)
 	rightText := timestamp
 	centerText := "PIXEL BATTLE TIMELAPSE"
+	if playername != nil {
+		centerText = fmt.Sprintf("PLAYER: %s", *playername)
+	}
 	padding := w / 50
 
 	textY := h + (uiH / 2) - ((13 * scale) / 2)
