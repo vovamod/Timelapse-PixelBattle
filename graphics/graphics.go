@@ -63,6 +63,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 				Output(filename, outputArgs).
 				Silent(false).
 				WithInput(pr).
+				ErrorToStdOut().
 				OverWriteOutput().
 				Run()
 		} else {
@@ -93,6 +94,11 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 
 		renderTimer := time.Now()
 		for _, block := range batch {
+			select {
+			case err := <-errChan:
+				return fmt.Errorf("ffmpeg exited early: %w", err)
+			default:
+			}
 			tex, ok := getRawTexture(block.BlockTexture)
 			if !ok {
 				continue

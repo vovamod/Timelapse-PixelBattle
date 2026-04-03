@@ -46,6 +46,9 @@ func main() {
 		log.Fatalf("Could not load textures: %v", err)
 	}
 	timer := time.Now()
+	if *debug {
+		log.SetType(log.LoggerDebug)
+	}
 	err = setup(*width, *height, *iterations, *textureSize, *framerate, *filename, *playername, *dbSource, *dbIp, *dbUser, *dbPassword, *dbName, *dbTable, *photo, *local, *debug)
 	if err != nil {
 		log.Errorf("Application failed: %v", err)
