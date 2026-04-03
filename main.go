@@ -59,19 +59,19 @@ func setup(width, height, iterations, textureSize, framerate int, filename, play
 	log.Info("Running pre config...")
 	db.Init(dbSource, dbIp, dbUser, dbPassword, dbName, local)
 	defer db.Close()
-	num, _ := db.GetMaxCount(dbTable, &playername)
+	num, _ := db.GetMaxCount(dbTable, playername)
 	var data []entities.VisualData
 	log.Infof("Current db record count is %d", num)
 	log.Info("Loading data in 1000 record batches...")
 	for i := 0; i <= num; i += 1000 {
-		sub := db.GetData(&playername, dbTable, i)
+		sub := db.GetData(playername, dbTable, i)
 		data = append(data, *sub...)
 		log.CustomStreamf("info", "Parsed %v out of %v", len(data), num)
-		num, _ = db.GetMaxCount(dbTable, &playername) // to keep track of NEW records
+		num, _ = db.GetMaxCount(dbTable, playername) // to keep track of NEW records
 	}
 	log.Infof("Loaded %d raw data schemas. Loading graphics", len(data))
 	if photo {
 		return graphics.GeneratePhotoLocal(data, width, height, textureSize, filename)
 	}
-	return graphics.EncodeGPU(data, width, height, iterations, textureSize, framerate, filename, &playername, true, debug)
+	return graphics.EncodeGPU(data, width, height, iterations, textureSize, framerate, filename, playername, true, debug)
 }

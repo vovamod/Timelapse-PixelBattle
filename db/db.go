@@ -103,15 +103,15 @@ func Close() {
 	}
 }
 
-func GetData(playername *string, table string, offset int) *[]entities.VisualData {
+func GetData(playername string, table string, offset int) *[]entities.VisualData {
 	var singleData entities.VisualData
 	var preparedData []entities.VisualData
 	var rowsCh driver.Rows
 	var rowsL *sql.Rows
 	var err error
 	query := fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s`, table)
-	if playername != nil {
-		query = fmt.Sprintf("%s WHERE owner = '%s'", query, *playername)
+	if playername != "" {
+		query = fmt.Sprintf("%s WHERE owner = '%s'", query, playername)
 	}
 	query = fmt.Sprintf("%s ORDER BY timestamp LIMIT 1000 OFFSET ?", query)
 	if local != true {
@@ -180,11 +180,11 @@ func GetData(playername *string, table string, offset int) *[]entities.VisualDat
 	return &preparedData
 }
 
-func GetMaxCount(table string, playername *string) (int, error) {
+func GetMaxCount(table string, playername string) (int, error) {
 	var totalRecords uint64
 	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)
-	if playername != nil {
-		query = fmt.Sprintf("%s WHERE owner = '%s'", query, *playername)
+	if playername != "" {
+		query = fmt.Sprintf("%s WHERE owner = '%s'", query, playername)
 	}
 	if local != true {
 		if err := clientCH.QueryRow(context.Background(), query).Scan(&totalRecords); err != nil {

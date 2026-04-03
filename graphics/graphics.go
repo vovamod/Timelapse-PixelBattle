@@ -19,7 +19,7 @@ import (
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
 
-func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSize, framerate int, filename string, playername *string, renderTime, debug bool) error {
+func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSize, framerate int, filename, playername string, renderTime, debug bool) error {
 	uiOffset := 0
 	if renderTime {
 		uiOffset = 200
@@ -172,7 +172,12 @@ func GeneratePhotoLocal(dest []entities.VisualData, width, height, textureSize i
 	if err != nil {
 		return fmt.Errorf("could not create file: %w", err)
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+		err = f.Close()
+		if err != nil {
+			log.Errorf("Error while closing file: %v", err)
+		}
+	}(f)
 
 	if err = png.Encode(f, canvas); err != nil {
 		return fmt.Errorf("png encoding failed: %w", err)
@@ -207,7 +212,7 @@ func verifyVideoFile(filename string) {
 	log.Successf("Video Verified: %s", stats)
 }
 
-func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername *string) {
+func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername string) {
 	stride := w * 3
 	scale := 8
 
@@ -221,8 +226,8 @@ func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername 
 	leftText := fmt.Sprintf("FRAME: %d", frame)
 	rightText := timestamp
 	centerText := "PIXEL BATTLE TIMELAPSE"
-	if playername != nil {
-		centerText = fmt.Sprintf("PLAYER: %s", *playername)
+	if playername != "" {
+		centerText = fmt.Sprintf("PLAYER: %s", playername)
 	}
 	padding := w / 50
 
