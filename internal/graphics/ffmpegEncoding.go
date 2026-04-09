@@ -1,8 +1,8 @@
 package graphics
 
 import (
-	"Timelapse-PixelBattle/common"
-	"Timelapse-PixelBattle/entities"
+	"Timelapse-PixelBattle/pkg/common"
+	"Timelapse-PixelBattle/pkg/entities"
 	"bufio"
 	"fmt"
 	"os"

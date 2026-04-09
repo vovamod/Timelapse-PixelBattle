@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.44.0
+	github.com/alecthomas/kong v1.15.0
 	github.com/mattn/go-sqlite3 v1.14.38
 	github.com/u2takey/ffmpeg-go v0.5.0
 	github.com/vovamod/utils v0.1.7

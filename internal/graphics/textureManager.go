@@ -1,7 +1,7 @@
 package graphics
 
 import (
-	"Timelapse-PixelBattle/entities"
+	"Timelapse-PixelBattle/pkg/entities"
 	"image"
 	"image/draw"
 	"os"

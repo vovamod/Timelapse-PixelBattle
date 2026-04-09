@@ -1,7 +1,7 @@
 package db
 
 import (
-	"Timelapse-PixelBattle/entities"
+	"Timelapse-PixelBattle/pkg/entities"
 	"context"
 	"crypto/tls"
 	"database/sql"
@@ -103,21 +103,32 @@ func Close() {
 	}
 }
 
-func GetData(playername string, table string, offset int) *[]entities.VisualData {
+func GetData(playername string, table string, lastTimestamp int64) *[]entities.VisualData {
 	var singleData entities.VisualData
 	var preparedData []entities.VisualData
 	var rowsCh driver.Rows
 	var rowsL *sql.Rows
 	var err error
-	query := fmt.Sprintf(`SELECT timestamp, x, y, c, owner FROM %s`, table)
+	var queryS strings.Builder
+
+	queryS.WriteString(fmt.Sprintf("SELECT timestamp, x, y, c, owner FROM %s WHERE 1=1", table))
+	var args []interface{}
 	if playername != "" {
-		query = fmt.Sprintf("%s WHERE owner = '%s'", query, playername)
+		queryS.WriteString(" AND owner = ?")
+		args = append(args, playername)
 	}
-	query = fmt.Sprintf("%s ORDER BY timestamp LIMIT 1000 OFFSET ?", query)
+
+	if lastTimestamp > 0 {
+		queryS.WriteString(" AND timestamp > ?")
+		args = append(args, lastTimestamp)
+	}
+	queryS.WriteString(" ORDER BY timestamp ASC LIMIT 100")
+	query := queryS.String()
+
 	if local != true {
-		rowsCh, err = clientCH.Query(context.Background(), query, offset)
+		rowsCh, err = clientCH.Query(context.Background(), query, args...)
 		if err != nil {
-			log.Info(err.Error())
+			log.Error(err.Error())
 			return new([]entities.VisualData)
 		}
 		defer func(rows driver.Rows) {
@@ -127,9 +138,9 @@ func GetData(playername string, table string, offset int) *[]entities.VisualData
 			}
 		}(rowsCh)
 	} else {
-		rowsL, err = clientLocal.Query(query, offset)
+		rowsL, err = clientLocal.Query(query, args...)
 		if err != nil {
-			log.Info(err.Error())
+			log.Error(err.Error())
 			return new([]entities.VisualData)
 		}
 		defer func(rows *sql.Rows) {
@@ -140,12 +151,17 @@ func GetData(playername string, table string, offset int) *[]entities.VisualData
 		}(rowsL)
 	}
 
-	if local != true {
+	if !local {
 		for rowsCh.Next() {
 			if err = rowsCh.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
-				log.Info(err.Error())
+				log.Error(err.Error())
 				return new([]entities.VisualData)
 			}
+
+			if singleData.BlockTexture == "" {
+				continue
+			}
+
 			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
 			preparedData = append(preparedData, singleData)
 			singleData = entities.VisualData{} // clean this mf
@@ -153,7 +169,6 @@ func GetData(playername string, table string, offset int) *[]entities.VisualData
 
 		if err = rowsCh.Err(); err != nil {
 			log.Info(err.Error())
-			return new([]entities.VisualData)
 		}
 	} else {
 		if rowsL == nil {
@@ -162,9 +177,14 @@ func GetData(playername string, table string, offset int) *[]entities.VisualData
 		}
 		for rowsL.Next() {
 			if err = rowsL.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
-				log.Info(err.Error())
+				log.Error(err.Error())
 				return new([]entities.VisualData)
 			}
+
+			if singleData.BlockTexture == "" {
+				continue
+			}
+
 			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
 			preparedData = append(preparedData, singleData)
 			singleData = entities.VisualData{} // clean this mf
@@ -173,7 +193,6 @@ func GetData(playername string, table string, offset int) *[]entities.VisualData
 		// Check for any errors encountered during iteration
 		if err = rowsL.Err(); err != nil {
 			log.Info(err.Error())
-			return new([]entities.VisualData)
 		}
 	}
 

@@ -1,7 +1,7 @@
 package graphics
 
 import (
-	"Timelapse-PixelBattle/entities"
+	"Timelapse-PixelBattle/pkg/entities"
 	"fmt"
 	"image"
 	"image/png"
@@ -24,7 +24,8 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	if renderTime {
 		uiOffset = 200
 	}
-	log.Info(fmt.Sprintf("Rendering graphics data for %d elements with GPU-optimized frames", len(dest)))
+	lenght := len(dest)
+	log.Info(fmt.Sprintf("Rendering graphics data for %d elements with GPU-optimized frames", lenght))
 	log.Info(fmt.Sprintf("Current configuration:\n  - Width: %v\n  - Height: %v\n  - Iterations: %v\n  - TextureSize: %v\n  - Framerate: %v",
 		width, height, iterations, textureSize, framerate))
 
@@ -83,12 +84,12 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	}()
 
 	batchSize := iterations
-	totalFrames := (len(dest) + batchSize - 1) / batchSize
+	totalFrames := (lenght + batchSize - 1) / batchSize
 
-	for i := 0; i < len(dest); i += batchSize {
+	for i := 0; i < lenght; i += batchSize {
 		end := i + batchSize
-		if end > len(dest) {
-			end = len(dest)
+		if end > lenght {
+			end = lenght
 		}
 		batch := dest[i:end]
 
@@ -154,13 +155,13 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	return <-errChan
 }
 
-func GeneratePhotoLocal(dest []entities.VisualData, width, height, textureSize int, filename string) error {
+func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize int, filename string) error {
 	log.Info(fmt.Sprintf("Generating high-res photo:\n  - Resolution: %dx%d\n  - Texture Size: %v", width, height, textureSize))
 
 	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
 
 	start := time.Now()
-	for _, block := range dest {
+	for _, block := range *dest {
 		tex, ok := getRawTexture(block.BlockTexture)
 		if !ok {
 			log.Infof("Texture %s is missing in assets folder", block.BlockTexture)

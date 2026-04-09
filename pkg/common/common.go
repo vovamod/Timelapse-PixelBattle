@@ -1,7 +1,7 @@
 package common
 
 import (
-	"Timelapse-PixelBattle/entities"
+	"Timelapse-PixelBattle/pkg/entities"
 	"encoding/json"
 	"os/exec"
 	"runtime"
