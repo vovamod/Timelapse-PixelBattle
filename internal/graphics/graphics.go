@@ -254,7 +254,7 @@ func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername 
 	textHeight := 13 * scale
 	textY := h + (uiH / 2) - (textHeight / 2)
 
-	// Draw with dynamic scale
+	// Draw with dynamic scale (14.04.2026 - Actually. we COULD optimize it but idk how to at this moment)
 	addSimpleText(pix, padding, textY, leftText, w, stride, scale)
 	rWidth := getTextWidth(rightText, scale)
 	addSimpleText(pix, w-rWidth-padding, textY, rightText, w, stride, scale)

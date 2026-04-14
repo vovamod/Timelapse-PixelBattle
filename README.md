@@ -24,18 +24,29 @@ From project root:
 ```bash
 # download dependencies and build
 go mod tidy
-go build -o timelapse # if windows go build -o timelapse.exe
+CGO_ENABLED=1 go build -o timelapse ./cmd/timelapse-pb # if windows go build -o timelapse.exe
 ```
+
+**Recommended build flags:**
+```bash
+CGO_ENABLED=1 GOAMD64=v3 go build -o timelapse -ldflags="-s -w" -trimpath -tags netgo ./cmd/timelapse-pb # if windows go build -o timelapse.exe
+```
+
+
 This produces an executable named `timelapse` (or `timelapse.exe` on Windows).
 
 ---
 
 ## Usage
 
-The program uses flags. Minimal required flag: `--filename` (output file). // but output will be nothing. literally. see below
+The program uses flags and command to set itself up and run. Minimal required flags are: filename, db-* (base on your setup).
 
+The commands available: render, photo
+
+**Example:**
 ```
-./timelapse --filename=out.mp4 [options]
+./timelapse render --filename=out.mp4 --db-source=./some.db [options]
+./timelapse photo --filename=out.png --db-source=./some.db [options]
 ```
 
 Flags:
@@ -46,27 +57,27 @@ Flags:
 * `--texture-size` (int) — texture size in pixels (default `16`)
 * `--framerate` (int) — video framerate (default `24`)
 * `--filename` (string) — output filename (required)
-* `--local` (bool)
-* `--photo` — generate single photo instead of video (specify in --filename=FILENAME.png)
-* `--debug` — enable debug mode
-*  --playername - Name of player by which the application will filter the data
+* `--local` (bool) — enable local mode database
+* `--photo` (bool) — generate single photo instead of video (specify in --filename=FILENAME.png)
+* `--debug` (bool) — enable debug mode
+* `--playername` (string) — name of player by which the application will filter the data
 
-Database connection flags (used in *normal mode*):
+Database connection flags:
 
-* `--db-ip` (string) — host:port for DB
-* `--db-user` (string)
-* `--db-password` (string)
-* `--db-name` (string)
-*  --db-source (string) - path to `.sql` file to load (activates *local mode*)
-*  --db-table (string) - table name
+* `--db-ip` (string) — host:port for DB (for local not needed)
+* `--db-user` (string) — database user (for local not needed)
+* `--db-password` (string) — database password (for local not needed)
+* `--db-name` (string) — database name (for local not needed)
+* `--db-source` (string) — path to `*.db` file of your local database, used in **local** mode
+* `--db-table` (string) — table name
 
 ---
 
 ## Examples
 
-### Local mode (SQL dump)
+### Local mode (SQLite database)
 
-The SQL dump should contain lines like:
+The SQL schema should look like this:
 
 ```
 create table new_co_block
@@ -84,16 +95,18 @@ create index idx_owner_id
     on new_co_block (owner, id);
 ```
 
+**If it's not containing indexes or id (PRIMARY KEY), the performance may degrade/code may fail.**
+
 Run:
 
 ```bash
-./timelapse --local --db-source=dump.sql --db-table=TaBLe --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
+./timelapse render --local --db-source=dump.sql --db-table=TaBLe --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
 ```
 
 For a single photo from the dump:
 
 ```bash
-./timelapse --local-mode=dump.sql --filename=photo.png --photo
+./timelapse photo --local --db-source=dump.sql --db-table=TaBLe --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
 ```
 
 ### Normal mode (db)
@@ -101,21 +114,16 @@ For a single photo from the dump:
 Ensure your DB is reachable and contains table `PB` with compatible columns. Example run:
 
 ```bash
-./timelapse --db-ip=127.0.0.1:9000 --db-table=TaBLe --db-user=user --db-password=pass --db-name=default --filename=timelapse.mp4
+./timelapse render --db-ip=127.0.0.1:9000 --db-table=TaBLe --db-user=user --db-password=pass --db-name=default --filename=timelapse.mp4
 ```
-
-Notes:
-
-* The code loads records in batches of 1000 and will re-check the max record count while running (so new records can be picked up).
-* The normal mode currently assumes table name `PB` and a specific schema used by the Minecraft plugin that produces the insert lines.
 
 ---
 
 ## Troubleshooting
 
 * If ffmpeg errors appear, verify `ffmpeg` is installed and in `PATH`.
-* If reading a local SQL file fails, ensure the file encoding is UTF-8 and the `INSERT` lines match the expected pattern. Local parsing strips parentheses, quotes and commas and expects values: `timestamp x y c`.
-* For large datasets, ensure sufficient RAM and disk space. The program triggers `runtime.GC()` during batch processing but may still use significant memory.
+* If reading a local SQLite fails, ensure that you compiled it with CGO enabled. Otherwise, program will fail.
+* For large datasets (tested on 2.3mil - 500-600MB ram usage) around 10 mil I recommend a machine with at least 4GB RAM free.
 
 ---
 
@@ -123,3 +131,4 @@ Notes:
 
 * The program uses `graphics.EncodeGPU` and `graphics.GeneratePhotoLocal` to produce output. Adjust `texture-size`, `iterations`, `width` and `height` to tune performance and visual quality.
 * `ffmpeg-go` is used to assemble encoded frames into the final video; the package toggles off compiled command logging by default.
+* For anyone who tried and got *problems* I recommend to open GH issue and we can solve this out. The plugin for this program will be released shortly.
