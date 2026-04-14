@@ -22,6 +22,7 @@ type CLI struct {
 	DBPassword string `name:"db-password"`
 	DBName     string `name:"db-name"`
 	DBTable    string `name:"db-table"`
+	DBTLS      bool   `name:"db-tls"`
 
 	Local    bool
 	WithInfo bool `name:"with-info"`

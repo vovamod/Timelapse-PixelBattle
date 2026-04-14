@@ -23,7 +23,7 @@ var (
 	local       = false
 )
 
-func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName string) (driver.Conn, error) {
+func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName string, databaseTLSEnabled bool) (driver.Conn, error) {
 	var (
 		dialCount = 0
 		ctx       = context.Background()
@@ -39,7 +39,7 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 					Name    string
 					Version string
 				}{
-					{Name: "Timelapse-machine", Version: "0.1.0"},
+					{Name: "timelapse-pixelbattle", Version: "2.1.0"},
 				},
 			},
 			DialContext: func(ctx context.Context, addr string) (net.Conn, error) {
@@ -48,7 +48,7 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 				return d.DialContext(ctx, "tcp", addr)
 			},
 			TLS: &tls.Config{
-				InsecureSkipVerify: true,
+				InsecureSkipVerify: !databaseTLSEnabled,
 			},
 			Settings: clickhouse.Settings{
 				"max_execution_time": 60,
@@ -73,7 +73,7 @@ func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName str
 	return conn, nil
 }
 
-func Init(databaseSource, databaseIp, databaseUser, databasePassword, databaseName string, localOnly bool) {
+func Init(databaseSource, databaseIp, databaseUser, databasePassword, databaseName string, databaseTLSEnabled, localOnly bool) {
 	local = localOnly
 	if localOnly == true {
 		conn, err := sql.Open("sqlite", databaseSource)
@@ -82,7 +82,7 @@ func Init(databaseSource, databaseIp, databaseUser, databasePassword, databaseNa
 		}
 		clientLocal = conn
 	} else {
-		conn, err := ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName)
+		conn, err := ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName, databaseTLSEnabled)
 		if err != nil {
 			log.Fatal(err.Error())
 		}

@@ -26,7 +26,7 @@ func main() {
 	timer := time.Now()
 
 	//  LOAD DB
-	data := loadData(cli.PlayerName, cli.DBSource, cli.DBIp, cli.DBUser, cli.DBPassword, cli.DBName, cli.DBTable, cli.Local)
+	data := loadData(cli.PlayerName, cli.DBSource, cli.DBIp, cli.DBUser, cli.DBPassword, cli.DBName, cli.DBTable, cli.DBTLS, cli.Local)
 
 	switch ctx.Command() {
 	case "render":
@@ -44,9 +44,9 @@ func main() {
 	log.Successf("Application finished in %v", time.Since(timer))
 }
 
-func loadData(playername, dbSource, dbIp, dbUser, dbPassword, dbName, dbTable string, local bool) *[]entities.VisualData {
+func loadData(playername, dbSource, dbIp, dbUser, dbPassword, dbName, dbTable string, dbTLS, local bool) *[]entities.VisualData {
 	log.Infof("Retrieving data from database: %s", dbName)
-	db.Init(dbSource, dbIp, dbUser, dbPassword, dbName, local)
+	db.Init(dbSource, dbIp, dbUser, dbPassword, dbName, dbTLS, local)
 	num, _ := db.GetMaxCount(dbTable, playername)
 	data := make([]entities.VisualData, 0, num)
 	var id int64
