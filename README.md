@@ -69,17 +69,29 @@ Database connection flags (used in *normal mode*):
 The SQL dump should contain lines like:
 
 ```
-create table TABLE_NAME_HERE
+create table new_co_block
 (
+    id        INTEGER
+        primary key,
     timestamp TIMESTAMP,
-    owner     CHAR(32),
+    owner     TEXT,
     x         BIGINT,
     y         BIGINT,
-    c         CHAR(128)
+    c         TEXT
 );
 
+create index idx_owner_timestamp
+    on new_co_block (owner, timestamp);
+
+create index idx_owner_timestamp_full
+    on new_co_block (owner, timestamp, x, y, c);
+
 create index idx_timestamp
-    on TABLE_NAME_HERE (timestamp);
+    on new_co_block (timestamp);
+
+create index idx_timestamp_id
+    on new_co_block (timestamp, id);
+
 ```
 
 Run:

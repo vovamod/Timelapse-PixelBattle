@@ -19,7 +19,7 @@ func main() {
 		log.SetType(log.LoggerDebug)
 	}
 
-	err := graphics.LoadTextureAtlas("assets")
+	err := graphics.LoadTextureAtlas("assets", cli.TextureSize)
 	if err != nil {
 		log.Fatalf("Could not load textures: %v", err)
 	}
@@ -49,16 +49,28 @@ func loadData(playername, dbSource, dbIp, dbUser, dbPassword, dbName, dbTable st
 	db.Init(dbSource, dbIp, dbUser, dbPassword, dbName, local)
 	num, _ := db.GetMaxCount(dbTable, playername)
 	data := make([]entities.VisualData, 0, num)
+	var id int64
+	var timestamp time.Time
+	startTime := time.Now()
 	log.Infof("Current db record count is %d", num)
-	timestamp := int64(0)
-	for i := 0; i <= num; i += 100 {
-		sub := db.GetData(playername, dbTable, timestamp)
+	for i := 0; i <= num; i += 1000 {
+		sub := db.GetData(playername, dbTable, id, timestamp)
 		if sub == nil || len(*sub) == 0 {
 			break
 		}
 		data = append(data, *sub...)
-		timestamp = data[len(data)-1].Time.Unix() + 1
-		log.CustomStreamf("info", "Parsed %v out of %v", len(data), num)
+
+		lastItem := (*sub)[len(*sub)-1]
+		id = lastItem.Id
+		timestamp = lastItem.Time
+
+		elapsed := time.Since(startTime).Seconds()
+		recordsPerSecond := 0
+		if elapsed > 0 {
+			recordsPerSecond = int(float64(len(data)) / elapsed)
+		}
+
+		log.CustomStreamf("info", "Parsed %v out of %v. Est parse speed: %v/s", len(data), num, recordsPerSecond)
 		//num, _ = db.GetMaxCount(dbTable, playername) // to keep track of NEW records // 09.04.2026 - retired. not recommended to be runed in real environment
 	}
 	db.Close()

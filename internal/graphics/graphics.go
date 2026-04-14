@@ -59,7 +59,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 				"pix_fmt":           "rgb24",
 				"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
 				"r":                 fmt.Sprintf("%d", framerate),
-				"thread_queue_size": "1024", // Buffer for high-speed input
+				"thread_queue_size": "2", // Buffer for high-speed input
 			}).
 				Output(filename, outputArgs).
 				Silent(false).
@@ -140,7 +140,12 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 
 		pipeTimer := time.Now()
 		if _, err := pw.Write(pix); err != nil {
-			return fmt.Errorf("ffmpeg pipe broken: %w", err)
+			select {
+			case ffmpegErr := <-errChan:
+				return fmt.Errorf("ffmpeg crashed: %v", ffmpegErr)
+			default:
+				return fmt.Errorf("ffmpeg pipe broken: %w", err)
+			}
 		}
 		log.Debugf("Pipe Write: %v", time.Since(pipeTimer))
 
@@ -151,8 +156,12 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	if err != nil {
 		log.Errorf("Error while closing pipe: %v", err.Error())
 	}
+	ffmpegResult := <-errChan
+	if ffmpegResult != nil {
+		return fmt.Errorf("ffmpeg failed during finalization: %w", ffmpegResult)
+	}
 	verifyVideoFile(filename)
-	return <-errChan
+	return nil
 }
 
 func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize int, filename string) error {
@@ -197,7 +206,6 @@ func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize 
 // verifyVideoFile uses ffprobe to ensure the GPU encoder produced a valid stream
 func verifyVideoFile(filename string) {
 	log.Notice(fmt.Sprintf("Running ffprobe verification on %s", filename))
-	time.Sleep(5 * time.Second)
 	args := []string{
 		"-v", "error",
 		"-select_streams", "v:0",

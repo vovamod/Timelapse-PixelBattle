@@ -13,7 +13,7 @@ import (
 
 var textureCacheRaw sync.Map
 
-func LoadTextureAtlas(assetPath string) error {
+func LoadTextureAtlas(assetPath string, textureSizeLimit int) error {
 	files, err := os.ReadDir(assetPath)
 	if err != nil {
 		return err
@@ -23,36 +23,51 @@ func LoadTextureAtlas(assetPath string) error {
 		if !strings.HasSuffix(file.Name(), ".png") {
 			continue
 		}
-		var f *os.File
-		var img image.Image
-		f, err = os.Open(assetPath + "/" + file.Name())
+
+		f, err := os.Open(assetPath + "/" + file.Name())
 		if err != nil {
-			log.Errorf("Error during reading texture file: %v", err)
+			log.Errorf("Error opening texture file %s: %v", file.Name(), err)
 			continue
 		}
 
-		img, _, err = image.Decode(f)
+		img, _, err := image.Decode(f)
 		if err != nil {
 			log.Errorf("Failed to decode %s: %v", file.Name(), err)
 			continue
 		}
 		err = f.Close()
 		if err != nil {
-			log.Errorf("Failed to close %s: %v", file.Name(), err)
-			return err
+			log.Errorf("Failed to close file %s: %v", file.Name(), err)
+			continue
 		}
 
 		bounds := img.Bounds()
-		rgba := image.NewRGBA(bounds)
-		draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+		origWidth := bounds.Dx()
+
+		finalSize := origWidth
+		if textureSizeLimit > 0 && textureSizeLimit < origWidth {
+			finalSize = textureSizeLimit
+		}
+
+		var finalImg *image.RGBA
+
+		if finalSize == origWidth {
+			rgba := image.NewRGBA(bounds)
+			draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+			finalImg = rgba
+		} else {
+			finalImg = image.NewRGBA(image.Rect(0, 0, finalSize, finalSize))
+			draw.Draw(finalImg, finalImg.Bounds(), img, bounds.Min, draw.Src)
+		}
 
 		textureCacheRaw.Store(file.Name(), &entities.Texture{
-			Pix:    rgba.Pix,
-			Stride: rgba.Stride,
-			Rect:   bounds,
+			Pix:    finalImg.Pix,
+			Stride: finalImg.Stride,
+			Rect:   finalImg.Bounds(),
 		})
 	}
-	log.Success("Texture Atlas loaded into memory.")
+
+	log.Successf("Texture Atlas loaded into memory. (Size limit: %dpx)", textureSizeLimit)
 	return nil
 }
 

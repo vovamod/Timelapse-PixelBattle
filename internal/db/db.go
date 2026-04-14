@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -103,7 +104,7 @@ func Close() {
 	}
 }
 
-func GetData(playername string, table string, lastTimestamp int64) *[]entities.VisualData {
+func GetData(playername string, table string, id int64, timestamp time.Time) *[]entities.VisualData {
 	var singleData entities.VisualData
 	var preparedData []entities.VisualData
 	var rowsCh driver.Rows
@@ -111,18 +112,18 @@ func GetData(playername string, table string, lastTimestamp int64) *[]entities.V
 	var err error
 	var queryS strings.Builder
 
-	queryS.WriteString(fmt.Sprintf("SELECT timestamp, x, y, c, owner FROM %s WHERE 1=1", table))
+	queryS.WriteString(fmt.Sprintf("SELECT id, timestamp, x, y, c, owner FROM %s WHERE 1=1", table))
 	var args []interface{}
 	if playername != "" {
 		queryS.WriteString(" AND owner = ?")
 		args = append(args, playername)
 	}
 
-	if lastTimestamp > 0 {
-		queryS.WriteString(" AND timestamp > ?")
-		args = append(args, lastTimestamp)
+	if id != 0 || !timestamp.IsZero() {
+		queryS.WriteString(" AND id > ?")
+		args = append(args, id)
 	}
-	queryS.WriteString(" ORDER BY timestamp ASC LIMIT 100")
+	queryS.WriteString(" LIMIT 1000")
 	query := queryS.String()
 
 	if local != true {
@@ -153,7 +154,7 @@ func GetData(playername string, table string, lastTimestamp int64) *[]entities.V
 
 	if !local {
 		for rowsCh.Next() {
-			if err = rowsCh.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
+			if err = rowsCh.Scan(&singleData.Id, &singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
 				log.Error(err.Error())
 				return new([]entities.VisualData)
 			}
@@ -176,7 +177,7 @@ func GetData(playername string, table string, lastTimestamp int64) *[]entities.V
 			return new([]entities.VisualData)
 		}
 		for rowsL.Next() {
-			if err = rowsL.Scan(&singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
+			if err = rowsL.Scan(&singleData.Id, &singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
 				log.Error(err.Error())
 				return new([]entities.VisualData)
 			}
