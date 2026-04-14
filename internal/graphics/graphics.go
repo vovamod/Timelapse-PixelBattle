@@ -22,7 +22,10 @@ import (
 func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSize, framerate int, filename, playername string, renderTime, debug bool) error {
 	uiOffset := 0
 	if renderTime {
-		uiOffset = 200
+		uiOffset = height / 10
+		if uiOffset < 40 {
+			uiOffset = 40
+		}
 	}
 	lenght := len(dest)
 	log.Info(fmt.Sprintf("Rendering graphics data for %d elements with GPU-optimized frames", lenght))
@@ -229,12 +232,14 @@ func verifyVideoFile(filename string) {
 
 func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername string) {
 	stride := w * 3
-	scale := 8
-
+	scale := uiH / 25
+	if scale < 1 {
+		scale = 1
+	}
 	for row := h; row < h+uiH; row++ {
 		for col := 0; col < w; col++ {
 			idx := row*stride + (col * 3)
-			pix[idx], pix[idx+1], pix[idx+2] = 50, 50, 50
+			pix[idx], pix[idx+1], pix[idx+2] = 35, 35, 35
 		}
 	}
 
@@ -244,23 +249,25 @@ func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername 
 	if playername != "" {
 		centerText = fmt.Sprintf("PLAYER: %s", playername)
 	}
-	padding := w / 50
 
-	textY := h + (uiH / 2) - ((13 * scale) / 2)
-	addSimpleText(pix, padding, textY, leftText, w, stride)
+	padding := w / 50
+	textHeight := 13 * scale
+	textY := h + (uiH / 2) - (textHeight / 2)
+
+	// Draw with dynamic scale
+	addSimpleText(pix, padding, textY, leftText, w, stride, scale)
 	rWidth := getTextWidth(rightText, scale)
-	addSimpleText(pix, w-rWidth-padding, textY, rightText, w, stride)
+	addSimpleText(pix, w-rWidth-padding, textY, rightText, w, stride, scale)
 	cWidth := getTextWidth(centerText, scale)
-	addSimpleText(pix, (w/2)-(cWidth/2), textY, centerText, w, stride)
+	addSimpleText(pix, (w/2)-(cWidth/2), textY, centerText, w, stride, scale)
 }
 
-func addSimpleText(pix []uint8, x, y int, label string, w, stride int) {
+func addSimpleText(pix []uint8, x, y int, label string, w, stride, scale int) {
 	face := basicfont.Face7x13
-	scale := 8
 	ascent := 11
 	dot := fixed.Point26_6{
 		X: fixed.Int26_6(x << 6),
-		Y: fixed.Int26_6((y + ascent) << 6),
+		Y: fixed.Int26_6((y + (ascent * scale / 8)) << 6),
 	}
 
 	for _, char := range label {
@@ -272,19 +279,16 @@ func addSimpleText(pix []uint8, x, y int, label string, w, stride int) {
 		for my := 0; my < dr.Dy(); my++ {
 			for mx := 0; mx < dr.Dx(); mx++ {
 				_, _, _, a := mask.At(maskp.X+mx, maskp.Y+my).RGBA()
-
 				if a > 0 {
 					for sy := 0; sy < scale; sy++ {
 						for sx := 0; sx < scale; sx++ {
 							px := dr.Min.X + (mx * scale) + sx
 							py := dr.Min.Y + (my * scale) + sy
 
-							if px >= 0 && px < w && py >= 0 {
+							if px >= 0 && px < w && py >= 0 && py < (len(pix)/stride) {
 								idx := py*stride + (px * 3)
 								if idx+2 < len(pix) {
-									pix[idx] = 255   // R
-									pix[idx+1] = 255 // G
-									pix[idx+2] = 255 // B
+									pix[idx], pix[idx+1], pix[idx+2] = 255, 255, 255
 								}
 							}
 						}
