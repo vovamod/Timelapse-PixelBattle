@@ -80,18 +80,8 @@ create table new_co_block
     c         TEXT
 );
 
-create index idx_owner_timestamp
-    on new_co_block (owner, timestamp);
-
-create index idx_owner_timestamp_full
-    on new_co_block (owner, timestamp, x, y, c);
-
-create index idx_timestamp
-    on new_co_block (timestamp);
-
-create index idx_timestamp_id
-    on new_co_block (timestamp, id);
-
+create index idx_owner_id
+    on new_co_block (owner, id);
 ```
 
 Run:
