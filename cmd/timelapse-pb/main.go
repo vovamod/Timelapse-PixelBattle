@@ -50,11 +50,10 @@ func loadData(playername, dbSource, dbIp, dbUser, dbPassword, dbName, dbTable st
 	num, _ := db.GetMaxCount(dbTable, playername)
 	data := make([]entities.VisualData, 0, num)
 	var id int64
-	var timestamp time.Time
 	startTime := time.Now()
 	log.Infof("Current db record count is %d", num)
-	for i := 0; i <= num; i += 1000 {
-		sub := db.GetData(playername, dbTable, id, timestamp)
+	for {
+		sub := db.GetData(playername, dbTable, id)
 		if sub == nil || len(*sub) == 0 {
 			break
 		}
@@ -62,7 +61,6 @@ func loadData(playername, dbSource, dbIp, dbUser, dbPassword, dbName, dbTable st
 
 		lastItem := (*sub)[len(*sub)-1]
 		id = lastItem.Id
-		timestamp = lastItem.Time
 
 		elapsed := time.Since(startTime).Seconds()
 		recordsPerSecond := 0

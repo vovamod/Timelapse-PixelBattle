@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
-	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -21,6 +19,11 @@ var (
 	clientCH    driver.Conn
 	clientLocal *sql.DB
 	local       = false
+)
+
+const (
+	TableSelect = `SELECT id, timestamp, x, y, c, owner FROM `
+	TableCount  = `SELECT COUNT(*) FROM `
 )
 
 func ClickHouseConn(databaseIp, databaseUser, databasePassword, databaseName string, databaseTLSEnabled bool) (driver.Conn, error) {
@@ -104,110 +107,26 @@ func Close() {
 	}
 }
 
-func GetData(playername string, table string, id int64, timestamp time.Time) *[]entities.VisualData {
-	var singleData entities.VisualData
-	var preparedData []entities.VisualData
-	var rowsCh driver.Rows
-	var rowsL *sql.Rows
-	var err error
-	var queryS strings.Builder
+func GetData(playername string, table string, id int64) *[]entities.VisualData {
+	query, args := buildQuery(playername, table, id)
 
-	queryS.WriteString(fmt.Sprintf("SELECT id, timestamp, x, y, c, owner FROM %s WHERE 1=1", table))
-	var args []interface{}
-	if playername != "" {
-		queryS.WriteString(" AND owner = ?")
-		args = append(args, playername)
+	// Split logic for easier reading
+	if local {
+		return retrieveFromSqlite(query, args)
 	}
-
-	if id != 0 || !timestamp.IsZero() {
-		queryS.WriteString(" AND id > ?")
-		args = append(args, id)
-	}
-	queryS.WriteString(" LIMIT 1000")
-	query := queryS.String()
-
-	if local != true {
-		rowsCh, err = clientCH.Query(context.Background(), query, args...)
-		if err != nil {
-			log.Error(err.Error())
-			return new([]entities.VisualData)
-		}
-		defer func(rows driver.Rows) {
-			err = rows.Close()
-			if err != nil {
-				log.Info(err.Error())
-			}
-		}(rowsCh)
-	} else {
-		rowsL, err = clientLocal.Query(query, args...)
-		if err != nil {
-			log.Error(err.Error())
-			return new([]entities.VisualData)
-		}
-		defer func(rows *sql.Rows) {
-			err = rows.Close()
-			if err != nil {
-				log.Info(err.Error())
-			}
-		}(rowsL)
-	}
-
-	if !local {
-		for rowsCh.Next() {
-			if err = rowsCh.Scan(&singleData.Id, &singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
-				log.Error(err.Error())
-				return new([]entities.VisualData)
-			}
-
-			if singleData.BlockTexture == "" {
-				continue
-			}
-
-			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
-			preparedData = append(preparedData, singleData)
-			singleData = entities.VisualData{} // clean this mf
-		}
-
-		if err = rowsCh.Err(); err != nil {
-			log.Info(err.Error())
-		}
-	} else {
-		if rowsL == nil {
-			log.Error("Exception! No rows in DB or client failed?")
-			return new([]entities.VisualData)
-		}
-		for rowsL.Next() {
-			if err = rowsL.Scan(&singleData.Id, &singleData.Time, &singleData.X, &singleData.Y, &singleData.BlockTexture, &singleData.Owner); err != nil {
-				log.Error(err.Error())
-				return new([]entities.VisualData)
-			}
-
-			if singleData.BlockTexture == "" {
-				continue
-			}
-
-			singleData.BlockTexture = strings.ToLower(singleData.BlockTexture) + ".png"
-			preparedData = append(preparedData, singleData)
-			singleData = entities.VisualData{} // clean this mf
-		}
-
-		// Check for any errors encountered during iteration
-		if err = rowsL.Err(); err != nil {
-			log.Info(err.Error())
-		}
-	}
-
-	return &preparedData
+	return retrieveFromCh(query, args)
 }
 
 func GetMaxCount(table string, playername string) (int, error) {
 	var totalRecords uint64
-	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)
+	query := TableCount + table
 	if playername != "" {
 		query = fmt.Sprintf("%s WHERE owner = '%s'", query, playername)
 	}
+
 	if local != true {
 		if err := clientCH.QueryRow(context.Background(), query).Scan(&totalRecords); err != nil {
+			log.Errorf("Error getting max count: %s", err.Error())
 			return 0, err
 		}
 	} else {
@@ -218,4 +137,25 @@ func GetMaxCount(table string, playername string) (int, error) {
 		}
 	}
 	return int(totalRecords), nil
+}
+
+func buildQuery(playername string, table string, id int64) (string, []any) {
+	base := TableSelect + table
+
+	switch {
+	case playername != "" && id != 0:
+		return base + " WHERE owner = ? AND id > ? ORDER BY id LIMIT 10000",
+			[]any{playername, id}
+
+	case playername != "":
+		return base + " WHERE owner = ? ORDER BY id LIMIT 10000",
+			[]any{playername}
+
+	case id != 0:
+		return base + " WHERE id > ? ORDER BY id LIMIT 10000",
+			[]any{id}
+
+	default:
+		return base + " ORDER BY id LIMIT 10000", nil
+	}
 }

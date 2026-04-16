@@ -76,7 +76,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 				"pix_fmt":           "rgb24",
 				"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
 				"r":                 fmt.Sprintf("%d", framerate),
-				"thread_queue_size": "1024", // Buffer for high-speed input
+				"thread_queue_size": "2", // Buffer for high-speed input
 			}).
 				Output(filename, outputArgs).
 				OverWriteOutput().
@@ -163,7 +163,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	if ffmpegResult != nil {
 		return fmt.Errorf("ffmpeg failed during finalization: %w", ffmpegResult)
 	}
-	verifyVideoFile(filename)
+	VerifyVideoFile(filename)
 	return nil
 }
 
@@ -206,8 +206,7 @@ func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize 
 	return nil
 }
 
-// verifyVideoFile uses ffprobe to ensure the GPU encoder produced a valid stream
-func verifyVideoFile(filename string) {
+func VerifyVideoFile(filename string) {
 	log.Notice(fmt.Sprintf("Running ffprobe verification on %s", filename))
 	args := []string{
 		"-v", "error",
@@ -229,6 +228,8 @@ func verifyVideoFile(filename string) {
 	stats := strings.ReplaceAll(string(output), "\n", " | ")
 	log.Successf("Video Verified: %s", stats)
 }
+
+// Other func
 
 func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername string) {
 	stride := w * 3
