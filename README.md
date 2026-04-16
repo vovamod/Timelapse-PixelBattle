@@ -7,6 +7,7 @@ Simple tool to render a timelapse / pixel battle video or single photo from pixe
 
 * Go 1.20+ (or compatible)
 * `ffmpeg` binary installed and available on `PATH` (used by `github.com/u2takey/ffmpeg-go`)
+* assets folder with Minecraft textures in .png format (not included due to licensing; obtain from your own Minecraft installation or resource packs)
 * A shell/terminal
 
 Install ffmpeg examples:
