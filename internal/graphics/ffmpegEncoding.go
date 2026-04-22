@@ -78,11 +78,14 @@ func getGPUEncoder(width, height int) (string, string, string) {
 	for i, g := range allGPUs {
 		log.Infof("  [%d] %s (%s) - Integrated: %v", i+1, g.Name, g.Vendor, g.IsIntegrated)
 	}
-	log.Info("Select a GPU by number or name (Leave empty for auto-selection):")
-
+	log.Info("Select a GPU by number or name (0 for CPU, Leave empty for auto-selection):")
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
+	if input == "0" || strings.EqualFold(input, "cpu") {
+		log.Warn("User selected Software Encoder. Proceeding with libx264.")
+		return "libx264", "libx264", "cpu"
+	}
 	var selectedGPU *entities.GPU
 
 	if input != "" {
