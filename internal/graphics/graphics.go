@@ -53,6 +53,40 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 		pix[i] = 255
 	}
 
+	//bgTex, _ := getRawTexture("white_concrete.png")
+	//
+	//texWidth := bgTex.Rect.Dx()
+	//texHeight := bgTex.Rect.Dy()
+	//
+	//for y := 0; y < height; y += texHeight {
+	//	for x := 0; x < width; x += texWidth {
+	//
+	//		for row := 0; row < texHeight; row++ {
+	//			targetY := y + row
+	//			if targetY >= height { break }
+	//
+	//			canvasRowStart := targetY*stride + (x * 3)
+	//			texRowStart := row * bgTex.Stride
+	//
+	//			currentPaintWidth := texWidth
+	//			if x + texWidth > width {
+	//				currentPaintWidth = width - x
+	//			}
+	//
+	//			if canvasRowStart >= 0 && canvasRowStart+(currentPaintWidth*3) <= len(pix) {
+	//				for col := 0; col < currentPaintWidth; col++ {
+	//					cIdx := canvasRowStart + (col * 3)
+	//					tIdx := texRowStart + (col * 4)
+	//
+	//					pix[cIdx]   = bgTex.Pix[tIdx]   // R
+	//					pix[cIdx+1] = bgTex.Pix[tIdx+1] // G
+	//					pix[cIdx+2] = bgTex.Pix[tIdx+2] // B
+	//				}
+	//			}
+	//		}
+	//	}
+	//}
+
 	errChan := make(chan error, 1)
 	go func() {
 		var err error
@@ -171,6 +205,19 @@ func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize 
 	log.Info(fmt.Sprintf("Generating high-res photo:\n  - Resolution: %dx%d\n  - Texture Size: %v", width, height, textureSize))
 
 	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	for i := 0; i < len(canvas.Pix); i++ {
+		canvas.Pix[i] = 255
+	}
+	// MINE
+	//bgTex, ok := getRawTexture("white_concrete.png")
+	//if ok {
+	//	for y := 0; y < height; y += textureSize {
+	//		for x := 0; x < width; x += textureSize {
+	//			fastBlit(canvas, bgTex, x, y)
+	//		}
+	//	}
+	//}
 
 	start := time.Now()
 	for _, block := range *dest {

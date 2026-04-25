@@ -79,15 +79,22 @@ func getRawTexture(name string) (*entities.Texture, bool) {
 }
 
 func fastBlit(canvas *image.RGBA, tex *entities.Texture, x, y int) {
-	paintWidth := tex.Rect.Dx() * 4 // 4 bytes (RGBA)
+
+	// OOB fail safe 1
+	rect := tex.Rect.Add(image.Pt(x, y)).Intersect(canvas.Bounds())
+	if rect.Empty() {
+		return
+	}
+	localX := rect.Min.X - x
+	localY := rect.Min.Y - y
+	paintWidth := rect.Dx() * 4
 
 	for row := 0; row < tex.Rect.Dy(); row++ {
-		canvasOffset := (y+row)*canvas.Stride + (x * 4)
-		texOffset := row * tex.Stride
+		canvasOffset := (rect.Min.Y+row)*canvas.Stride + (rect.Min.X * 4)
+		texOffset := (localY+row)*tex.Stride + (localX * 4)
 
-		// OOB CHECK U DUMBSHIT
-		if canvasOffset+paintWidth <= len(canvas.Pix) {
-			copy(canvas.Pix[canvasOffset:canvasOffset+paintWidth], tex.Pix[texOffset:texOffset+paintWidth])
-		}
+		// OOB fail safe 2
+		copy(canvas.Pix[canvasOffset:canvasOffset+paintWidth],
+			tex.Pix[texOffset:texOffset+paintWidth])
 	}
 }
