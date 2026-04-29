@@ -172,20 +172,22 @@ func getEncoderArgs(encoder, encoderName, gpuType string, width, height int, use
 	if useScaling {
 		targetWidth, targetHeight = calculateScaledDimensions(width, height, gpuType)
 	}
+	baseArgs["movflags"] = "faststart"
 
 	switch encoderName {
 	case "nvenc", "nvenc_hevc":
 		baseArgs["c:v"] = encoder
 		baseArgs["preset"] = "p4"
 		baseArgs["cq"] = "23"
-		baseArgs["rc"] = "vbr"
+		baseArgs["rc"] = "constqp"
 		baseArgs["color_range"] = "pc"
 		baseArgs["colorspace"] = "bt709"
 		baseArgs["color_primaries"] = "bt709"
 		baseArgs["color_trc"] = "bt709"
 		if useScaling {
-			baseArgs["vf"] = fmt.Sprintf("format=nv12,hwupload_cuda,scale_cuda=w=%d:h=%d:interp_algo=nearest", targetWidth, targetHeight)
+			baseArgs["vf"] = fmt.Sprintf("hwupload_cuda,scale_cuda=w=%d:h=%d:interp_algo=nearest", targetWidth, targetHeight)
 		}
+		baseArgs["bf"] = "0"
 	case "amf":
 		baseArgs["c:v"] = encoder
 		baseArgs["quality"] = "quality"

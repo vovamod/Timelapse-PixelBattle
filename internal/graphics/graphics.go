@@ -2,6 +2,7 @@ package graphics
 
 import (
 	"Timelapse-PixelBattle/pkg/entities"
+	"bufio"
 	"fmt"
 	"image"
 	"image/png"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/image/font/basicfont"
@@ -43,60 +45,49 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	}
 
 	inputHeight := height + uiOffset
+	strideY := width
+	strideUV := width / 2
+	uOffset := inputHeight * strideY
+	vOffset := uOffset + (inputHeight/2)*strideUV
+	totalSize := (inputHeight * width * 3) / 2
 	outputArgs := getEncoderArgs(encoder, encoderName, gpuType, width, inputHeight, needsScaling)
-	// add pipe
+
 	pr, pw := io.Pipe()
-
-	stride := width * 3
-	pix := make([]uint8, inputHeight*stride)
-	for i := range pix {
-		pix[i] = 255
+	bufferPool := &sync.Pool{
+		New: func() interface{} {
+			return make([]byte, totalSize)
+		},
 	}
-
-	//bgTex, _ := getRawTexture("white_concrete.png")
-	//
-	//texWidth := bgTex.Rect.Dx()
-	//texHeight := bgTex.Rect.Dy()
-	//
-	//for y := 0; y < height; y += texHeight {
-	//	for x := 0; x < width; x += texWidth {
-	//
-	//		for row := 0; row < texHeight; row++ {
-	//			targetY := y + row
-	//			if targetY >= height { break }
-	//
-	//			canvasRowStart := targetY*stride + (x * 3)
-	//			texRowStart := row * bgTex.Stride
-	//
-	//			currentPaintWidth := texWidth
-	//			if x + texWidth > width {
-	//				currentPaintWidth = width - x
-	//			}
-	//
-	//			if canvasRowStart >= 0 && canvasRowStart+(currentPaintWidth*3) <= len(pix) {
-	//				for col := 0; col < currentPaintWidth; col++ {
-	//					cIdx := canvasRowStart + (col * 3)
-	//					tIdx := texRowStart + (col * 4)
-	//
-	//					pix[cIdx]   = bgTex.Pix[tIdx]   // R
-	//					pix[cIdx+1] = bgTex.Pix[tIdx+1] // G
-	//					pix[cIdx+2] = bgTex.Pix[tIdx+2] // B
-	//				}
-	//			}
-	//		}
-	//	}
-	//}
-
+	pwBuffered := bufio.NewWriterSize(pw, 1024*1024*64) // for myself: Use between 2 MB - 78 MB. Anything else -> trash
+	frameChan := make(chan []uint8, 60)
 	errChan := make(chan error, 1)
+	go func() {
+		for pix := range frameChan {
+			if _, err := pwBuffered.Write(pix); err != nil {
+				errChan <- err
+				return
+			}
+			bufferPool.Put(pix)
+		}
+		err := pwBuffered.Flush()
+		if err != nil {
+			log.Warn("Error flushing buffered writer")
+		}
+		err = pw.Close()
+		if err != nil {
+			log.Warn("Error closing buffered writer")
+		}
+	}()
 	go func() {
 		var err error
 		if debug {
 			err = ffmpeg.Input("pipe:0", ffmpeg.KwArgs{
 				"f":                 "rawvideo",
-				"pix_fmt":           "rgb24",
+				"pix_fmt":           "yuv420p",
 				"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
 				"r":                 fmt.Sprintf("%d", framerate),
-				"thread_queue_size": "2", // Buffer for high-speed input
+				"thread_queue_size": "8192", // Doubled again
+				"threads":           "4",
 			}).
 				Output(filename, outputArgs).
 				Silent(false).
@@ -107,10 +98,11 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 		} else {
 			err = ffmpeg.Input("pipe:0", ffmpeg.KwArgs{
 				"f":                 "rawvideo",
-				"pix_fmt":           "rgb24",
+				"pix_fmt":           "yuv420p",
 				"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
 				"r":                 fmt.Sprintf("%d", framerate),
-				"thread_queue_size": "2", // Buffer for high-speed input
+				"thread_queue_size": "8192", // Doubled again
+				"threads":           "4",
 			}).
 				Output(filename, outputArgs).
 				OverWriteOutput().
@@ -120,6 +112,22 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 		errChan <- err
 	}()
 
+	masterCanvas := bufferPool.Get().([]uint8)
+	for i := 0; i < uOffset; i++ {
+		masterCanvas[i] = 235
+	}
+	for i := uOffset; i < len(masterCanvas); i++ {
+		masterCanvas[i] = 128
+	}
+	//bgTex, ok := getRawTexture("white_concrete.png")
+	//if ok {
+	//	texW, texH := bgTex.Rect.Dx(), bgTex.Rect.Dy()
+	//	for y := 0; y < height; y += texH {
+	//		for x := 0; x < width; x += texW {
+	//			blitYUV(masterCanvas, bgTex, x, y, width, uOffset, vOffset)
+	//		}
+	//	}
+	//}
 	batchSize := iterations
 	totalFrames := (lenght + batchSize - 1) / batchSize
 
@@ -129,73 +137,40 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 			end = lenght
 		}
 		batch := dest[i:end]
-
 		renderTimer := time.Now()
+
 		for _, block := range batch {
-			select {
-			case err := <-errChan:
-				return fmt.Errorf("ffmpeg exited early: %w", err)
-			default:
-			}
 			tex, ok := getRawTexture(block.BlockTexture)
 			if !ok {
 				continue
 			}
-			// Convert RGBA -> RGB24 (255,255,255)
 			targetX := int(block.X) * textureSize
 			targetY := int(block.Y) * textureSize
-
-			texWidth := tex.Rect.Dx()
-			texHeight := tex.Rect.Dy()
-
-			for row := 0; row < texHeight; row++ {
-				canvasRowStart := (targetY+row)*stride + (targetX * 3)
-				texRowStart := row * tex.Stride
-
-				// SB check
-				if canvasRowStart >= 0 && canvasRowStart+(texWidth*3) <= len(pix) {
-					for col := 0; col < texWidth; col++ {
-						cIdx := canvasRowStart + (col * 3)
-						tIdx := texRowStart + (col * 4)
-
-						// Copy R, G, B
-						pix[cIdx] = tex.Pix[tIdx]
-						pix[cIdx+1] = tex.Pix[tIdx+1]
-						pix[cIdx+2] = tex.Pix[tIdx+2]
-					}
-				}
-			}
+			blitYUV(masterCanvas, tex, targetX, targetY, width, uOffset, vOffset)
 		}
+
 		if renderTime {
 			currentFrame := (i / batchSize) + 1
 			ts := batch[len(batch)-1].Time.Format("2006-01-02 15:04")
-
-			drawFooter(pix, width, height, uiOffset, currentFrame, ts, playername)
+			drawFooterYUV(masterCanvas, width, height, uiOffset, currentFrame, ts, playername)
 		}
-
 		log.Debugf("Frame prepared: %v", time.Since(renderTimer))
-
+		toPipe := bufferPool.Get().([]uint8)
+		copy(toPipe, masterCanvas)
 		pipeTimer := time.Now()
-		if _, err := pw.Write(pix); err != nil {
-			select {
-			case ffmpegErr := <-errChan:
-				return fmt.Errorf("ffmpeg crashed: %v", ffmpegErr)
-			default:
-				return fmt.Errorf("ffmpeg pipe broken: %w", err)
-			}
+		select {
+		case frameChan <- toPipe:
+		case ffmpegErr := <-errChan:
+			return fmt.Errorf("ffmpeg crashed: %v", ffmpegErr)
 		}
-		log.Debugf("Pipe Write: %v", time.Since(pipeTimer))
 
+		log.Debugf("Pipe Write: %v", time.Since(pipeTimer))
 		log.CustomStreamf("info", "Progress: %d/%d frames", (i/batchSize)+1, totalFrames)
 	}
-
-	err := pw.Close()
-	if err != nil {
-		log.Errorf("Error while closing pipe: %v", err.Error())
-	}
-	ffmpegResult := <-errChan
-	if ffmpegResult != nil {
-		return fmt.Errorf("ffmpeg failed during finalization: %w", ffmpegResult)
+	close(frameChan)
+	ffmpegErr := <-errChan
+	if ffmpegErr != nil {
+		log.Errorf("FFmpeg finished with error: %v", ffmpegErr)
 	}
 	VerifyVideoFile(filename)
 	return nil
@@ -209,6 +184,7 @@ func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize 
 	for i := 0; i < len(canvas.Pix); i++ {
 		canvas.Pix[i] = 255
 	}
+
 	// MINE
 	//bgTex, ok := getRawTexture("white_concrete.png")
 	//if ok {
@@ -223,7 +199,6 @@ func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize 
 	for _, block := range *dest {
 		tex, ok := getRawTexture(block.BlockTexture)
 		if !ok {
-			log.Infof("Texture %s is missing in assets folder", block.BlockTexture)
 			continue
 		}
 
@@ -241,7 +216,7 @@ func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize 
 	defer func(f *os.File) {
 		err = f.Close()
 		if err != nil {
-			log.Errorf("Error while closing file: %v", err)
+			log.Errorf("Error during file closure: %v", err.Error())
 		}
 	}(f)
 
@@ -310,6 +285,58 @@ func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername 
 	addSimpleText(pix, (w/2)-(cWidth/2), textY, centerText, w, stride, scale)
 }
 
+func drawFooterYUV(pix []uint8, w, h, uiH, frame int, timestamp string, playername string) {
+	strideY := w
+	strideUV := w / 2
+
+	for row := h; row < h+uiH; row++ {
+		for col := 0; col < w; col++ {
+			idx := row*strideY + col
+			if idx < len(pix) {
+				pix[idx] = 35
+			}
+		}
+	}
+	totalHeight := h + uiH
+	uOffset := totalHeight * strideY
+	vOffset := uOffset + (totalHeight/2)*strideUV
+	footerStartUV := h / 2
+	footerHeightUV := uiH / 2
+	for row := footerStartUV; row < footerStartUV+footerHeightUV; row++ {
+		for col := 0; col < strideUV; col++ {
+			uvIdx := row*strideUV + col
+			if uOffset+uvIdx < vOffset {
+				pix[uOffset+uvIdx] = 128
+			}
+			if vOffset+uvIdx < len(pix) {
+				pix[vOffset+uvIdx] = 128
+			}
+		}
+	}
+
+	scale := uiH / 25
+	if scale < 1 {
+		scale = 1
+	}
+
+	leftText := fmt.Sprintf("FRAME: %d", frame)
+	rightText := timestamp
+	centerText := "PIXEL BATTLE TIMELAPSE"
+	if playername != "" {
+		centerText = fmt.Sprintf("PLAYER: %s", playername)
+	}
+
+	padding := w / 50
+	textHeight := 13 * scale
+	textY := h + (uiH / 2) - (textHeight / 2)
+
+	addSimpleTextYUV(pix, padding, textY, leftText, w, strideY, scale)
+	rWidth := getTextWidth(rightText, scale)
+	addSimpleTextYUV(pix, w-rWidth-padding, textY, rightText, w, strideY, scale)
+	cWidth := getTextWidth(centerText, scale)
+	addSimpleTextYUV(pix, (w/2)-(cWidth/2), textY, centerText, w, strideY, scale)
+}
+
 func addSimpleText(pix []uint8, x, y int, label string, w, stride, scale int) {
 	face := basicfont.Face7x13
 	ascent := 11
@@ -337,6 +364,48 @@ func addSimpleText(pix []uint8, x, y int, label string, w, stride, scale int) {
 								idx := py*stride + (px * 3)
 								if idx+2 < len(pix) {
 									pix[idx], pix[idx+1], pix[idx+2] = 255, 255, 255
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		dot.X += advance * fixed.Int26_6(scale)
+	}
+}
+
+func addSimpleTextYUV(pix []uint8, x, y int, label string, w, strideY, scale int) {
+	face := basicfont.Face7x13
+	ascent := 11
+	dot := fixed.Point26_6{
+		X: fixed.Int26_6(x << 6),
+		Y: fixed.Int26_6((y + (ascent * scale / 8)) << 6),
+	}
+
+	yLimit := len(pix)
+	if strideY > 0 {
+	}
+
+	for _, char := range label {
+		dr, mask, maskp, advance, ok := face.Glyph(dot, char)
+		if !ok {
+			continue
+		}
+
+		for my := 0; my < dr.Dy(); my++ {
+			for mx := 0; mx < dr.Dx(); mx++ {
+				_, _, _, a := mask.At(maskp.X+mx, maskp.Y+my).RGBA()
+				if a > 0 {
+					for sy := 0; sy < scale; sy++ {
+						for sx := 0; sx < scale; sx++ {
+							px := dr.Min.X + (mx * scale) + sx
+							py := dr.Min.Y + (my * scale) + sy
+
+							if px >= 0 && px < w && py >= 0 {
+								idx := py*strideY + px
+								if idx < yLimit {
+									pix[idx] = 255
 								}
 							}
 						}

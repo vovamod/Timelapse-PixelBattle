@@ -31,26 +31,18 @@ func LoadTextureAtlas(assetPath string, textureSizeLimit int) error {
 		}
 
 		img, _, err := image.Decode(f)
-		if err != nil {
-			log.Errorf("Failed to decode %s: %v", file.Name(), err)
-			continue
-		}
 		err = f.Close()
 		if err != nil {
-			log.Errorf("Failed to close file %s: %v", file.Name(), err)
-			continue
+			log.Errorf("Failed to close image: %v", err)
 		}
 
 		bounds := img.Bounds()
 		origWidth := bounds.Dx()
-
 		finalSize := origWidth
 		if textureSizeLimit > 0 && textureSizeLimit < origWidth {
 			finalSize = textureSizeLimit
 		}
-
 		var finalImg *image.RGBA
-
 		if finalSize == origWidth {
 			rgba := image.NewRGBA(bounds)
 			draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
@@ -96,5 +88,42 @@ func fastBlit(canvas *image.RGBA, tex *entities.Texture, x, y int) {
 		// OOB fail safe 2
 		copy(canvas.Pix[canvasOffset:canvasOffset+paintWidth],
 			tex.Pix[texOffset:texOffset+paintWidth])
+	}
+}
+
+func blitYUV(canvas []uint8, tex *entities.Texture, startX, startY, canvasW, uOff, vOff int) {
+	strideY := canvasW
+	strideUV := canvasW / 2
+
+	texW := tex.Rect.Dx()
+	texH := tex.Rect.Dy()
+
+	for row := 0; row < texH; row++ {
+		ty := startY + row
+		if ty >= (uOff / strideY) {
+			break
+		}
+
+		for col := 0; col < texW; col++ {
+			tx := startX + col
+			if tx >= canvasW {
+				break
+			}
+
+			tIdx := (row * tex.Stride) + (col * 4)
+			r, g, b := tex.Pix[tIdx], tex.Pix[tIdx+1], tex.Pix[tIdx+2]
+
+			yVal := uint8((66*int(r)+129*int(g)+25*int(b)+128)>>8 + 16)
+			canvas[ty*strideY+tx] = yVal
+
+			if ty%2 == 0 && tx%2 == 0 {
+				uVal := uint8((-38*int(r)-74*int(g)+112*int(b)+128)>>8 + 128)
+				vVal := uint8((112*int(r)-94*int(g)-18*int(b)+128)>>8 + 128)
+
+				uvIdx := (ty/2)*strideUV + (tx / 2)
+				canvas[uOff+uvIdx] = uVal
+				canvas[vOff+uvIdx] = vVal
+			}
+		}
 	}
 }
