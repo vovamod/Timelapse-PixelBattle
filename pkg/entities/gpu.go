@@ -6,3 +6,9 @@ type GPU struct {
 	IsIntegrated bool
 	Driver       string
 }
+
+type GPUSelection struct {
+	Encoder     string
+	EncoderName string
+	GPUType     string
+}

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"io"
 	"os"
@@ -21,7 +22,8 @@ import (
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
 
-func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSize, framerate int, filename, playername string, renderTime, debug bool) error {
+func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSize, framerate int,
+	filename, playername string, eGPU entities.GPUSelection, renderTime, debug bool, onPreview func(img image.Image, progress float64)) error {
 	uiOffset := 0
 	if renderTime {
 		uiOffset = height / 10
@@ -30,17 +32,14 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 		}
 	}
 	lenght := len(dest)
-	log.Info(fmt.Sprintf("Rendering graphics data for %d elements with GPU-optimized frames", lenght))
+	log.Info(fmt.Sprintf("Rendering graphics data for %d elements ", lenght))
 	log.Info(fmt.Sprintf("Current configuration:\n  - Width: %v\n  - Height: %v\n  - Iterations: %v\n  - TextureSize: %v\n  - Framerate: %v",
 		width, height, iterations, textureSize, framerate))
 
-	encoder, encoderName, gpuType := getGPUEncoder(width, height)
-	log.Info(fmt.Sprintf("Selected encoder: %s (%s) for %s", encoderName, encoder, gpuType))
-
-	needsScaling := (width > 3840 || height > 2160) && encoderName != "libx264" // ye. we need to keep in mind that anything other than x264 (CPU) encoders have limits
+	needsScaling := (width > 3840 || height > 2160) && eGPU.EncoderName != "libx264" // ye. we need to keep in mind that anything other than x264 (CPU) encoders have limits
 
 	if needsScaling {
-		scaledWidth, scaledHeight := calculateScaledDimensions(width, height, gpuType)
+		scaledWidth, scaledHeight := calculateScaledDimensions(width, height, eGPU.GPUType)
 		log.Info(fmt.Sprintf("Output resolution (will be scaled by ffmpeg): %dx%d", scaledWidth, scaledHeight))
 	}
 
@@ -50,7 +49,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	uOffset := inputHeight * strideY
 	vOffset := uOffset + (inputHeight/2)*strideUV
 	totalSize := (inputHeight * width * 3) / 2
-	outputArgs := getEncoderArgs(encoder, encoderName, gpuType, width, inputHeight, needsScaling)
+	outputArgs := getEncoderArgs(eGPU, width, inputHeight, needsScaling)
 
 	pr, pw := io.Pipe()
 	bufferPool := &sync.Pool{
@@ -131,6 +130,12 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	batchSize := iterations
 	totalFrames := (lenght + batchSize - 1) / batchSize
 
+	// GUI
+	previewInterval := totalFrames / 20
+	if previewInterval < 1 {
+		previewInterval = 1
+	}
+
 	for i := 0; i < lenght; i += batchSize {
 		end := i + batchSize
 		if end > lenght {
@@ -164,6 +169,17 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 			return fmt.Errorf("ffmpeg crashed: %v", ffmpegErr)
 		}
 
+		// GUI
+		if onPreview != nil {
+			currentFrameIdx := i / batchSize
+			progressPercent := float64(currentFrameIdx+1) / float64(totalFrames)
+			if currentFrameIdx%previewInterval == 0 || currentFrameIdx == totalFrames-1 {
+				onPreview(convertYUVToImage(masterCanvas, width, inputHeight, uOffset, vOffset), progressPercent)
+			} else {
+				onPreview(nil, progressPercent)
+			}
+		}
+
 		log.Debugf("Pipe Write: %v", time.Since(pipeTimer))
 		log.CustomStreamf("info", "Progress: %d/%d frames", (i/batchSize)+1, totalFrames)
 	}
@@ -176,7 +192,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	return nil
 }
 
-func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize int, filename string) error {
+func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize int, filename string) (image.Image, error) {
 	log.Info(fmt.Sprintf("Generating high-res photo:\n  - Resolution: %dx%d\n  - Texture Size: %v", width, height, textureSize))
 
 	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -211,7 +227,7 @@ func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize 
 
 	f, err := os.Create(filename)
 	if err != nil {
-		return fmt.Errorf("could not create file: %w", err)
+		return nil, fmt.Errorf("could not create file: %w", err)
 	}
 	defer func(f *os.File) {
 		err = f.Close()
@@ -221,11 +237,11 @@ func GeneratePhotoLocal(dest *[]entities.VisualData, width, height, textureSize 
 	}(f)
 
 	if err = png.Encode(f, canvas); err != nil {
-		return fmt.Errorf("png encoding failed: %w", err)
+		return nil, fmt.Errorf("png encoding failed: %w", err)
 	}
 
 	log.Successf("Photo saved to: %s", filename)
-	return nil
+	return canvas, nil
 }
 
 func VerifyVideoFile(filename string) {
@@ -253,36 +269,40 @@ func VerifyVideoFile(filename string) {
 
 // Other func
 
-func drawFooter(pix []uint8, w, h, uiH, frame int, timestamp string, playername string) {
-	stride := w * 3
-	scale := uiH / 25
-	if scale < 1 {
-		scale = 1
-	}
-	for row := h; row < h+uiH; row++ {
-		for col := 0; col < w; col++ {
-			idx := row*stride + (col * 3)
-			pix[idx], pix[idx+1], pix[idx+2] = 35, 35, 35
+func convertYUVToImage(yuv []byte, w, h, uOff, vOff int) image.Image {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			yIdx := y*w + x
+			uvIdx := (y/2)*(w/2) + (x / 2)
+
+			Y := float64(yuv[yIdx])
+			U := float64(yuv[uOff+uvIdx]) - 128
+			V := float64(yuv[vOff+uvIdx]) - 128
+
+			r := Y + 1.402*V
+			g := Y - 0.344136*U - 0.714136*V
+			b := Y + 1.772*U
+
+			img.Set(x, y, color.RGBA{
+				R: uint8(clamp(r)),
+				G: uint8(clamp(g)),
+				B: uint8(clamp(b)),
+				A: 255,
+			})
 		}
 	}
+	return img
+}
 
-	leftText := fmt.Sprintf("FRAME: %d", frame)
-	rightText := timestamp
-	centerText := "PIXEL BATTLE TIMELAPSE"
-	if playername != "" {
-		centerText = fmt.Sprintf("PLAYER: %s", playername)
+func clamp(val float64) float64 {
+	if val < 0 {
+		return 0
 	}
-
-	padding := w / 50
-	textHeight := 13 * scale
-	textY := h + (uiH / 2) - (textHeight / 2)
-
-	// Draw with dynamic scale (14.04.2026 - Actually. we COULD optimize it but idk how to at this moment)
-	addSimpleText(pix, padding, textY, leftText, w, stride, scale)
-	rWidth := getTextWidth(rightText, scale)
-	addSimpleText(pix, w-rWidth-padding, textY, rightText, w, stride, scale)
-	cWidth := getTextWidth(centerText, scale)
-	addSimpleText(pix, (w/2)-(cWidth/2), textY, centerText, w, stride, scale)
+	if val > 255 {
+		return 255
+	}
+	return val
 }
 
 func drawFooterYUV(pix []uint8, w, h, uiH, frame int, timestamp string, playername string) {
@@ -335,44 +355,6 @@ func drawFooterYUV(pix []uint8, w, h, uiH, frame int, timestamp string, playerna
 	addSimpleTextYUV(pix, w-rWidth-padding, textY, rightText, w, strideY, scale)
 	cWidth := getTextWidth(centerText, scale)
 	addSimpleTextYUV(pix, (w/2)-(cWidth/2), textY, centerText, w, strideY, scale)
-}
-
-func addSimpleText(pix []uint8, x, y int, label string, w, stride, scale int) {
-	face := basicfont.Face7x13
-	ascent := 11
-	dot := fixed.Point26_6{
-		X: fixed.Int26_6(x << 6),
-		Y: fixed.Int26_6((y + (ascent * scale / 8)) << 6),
-	}
-
-	for _, char := range label {
-		dr, mask, maskp, advance, ok := face.Glyph(dot, char)
-		if !ok {
-			continue
-		}
-
-		for my := 0; my < dr.Dy(); my++ {
-			for mx := 0; mx < dr.Dx(); mx++ {
-				_, _, _, a := mask.At(maskp.X+mx, maskp.Y+my).RGBA()
-				if a > 0 {
-					for sy := 0; sy < scale; sy++ {
-						for sx := 0; sx < scale; sx++ {
-							px := dr.Min.X + (mx * scale) + sx
-							py := dr.Min.Y + (my * scale) + sy
-
-							if px >= 0 && px < w && py >= 0 && py < (len(pix)/stride) {
-								idx := py*stride + (px * 3)
-								if idx+2 < len(pix) {
-									pix[idx], pix[idx+1], pix[idx+2] = 255, 255, 255
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		dot.X += advance * fixed.Int26_6(scale)
-	}
 }
 
 func addSimpleTextYUV(pix []uint8, x, y int, label string, w, strideY, scale int) {

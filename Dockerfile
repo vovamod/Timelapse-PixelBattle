@@ -13,8 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v3 \
     go build -o timelapse \
     -ldflags="-s -w" \
     -trimpath \
-    -tags netgo \
-    ./cmd/timelapse-pb
+    ./cmd/timelapse-cli
 
 # Runner
 FROM alpine:3.21

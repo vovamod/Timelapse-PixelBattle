@@ -66,12 +66,12 @@ func minFloat(a, b float64) float64 {
 	return b
 }
 
-// getGPUEncoder - uses Best GPU encoder IF available for ffmpeg (prime-run can fail.)
-func getGPUEncoder(width, height int) (string, string, string) {
+// GetGPUEncoder - uses Best GPU encoder IF available for ffmpeg (prime-run can fail.) - Exporting IN ORDER to use in timelapse-cli/timelapse-gui
+func GetGPUEncoder(width, height int) entities.GPUSelection {
 	allGPUs := common.GetAvailableGPUs()
 
 	if len(allGPUs) == 0 {
-		return "libx264", "libx264", "cpu"
+		return entities.GPUSelection{Encoder: "libx264", EncoderName: "libx264", GPUType: "cpu"}
 	}
 
 	log.Info("Detected GPUs:")
@@ -84,7 +84,7 @@ func getGPUEncoder(width, height int) (string, string, string) {
 	input = strings.TrimSpace(input)
 	if input == "0" || strings.EqualFold(input, "cpu") {
 		log.Warn("User selected Software Encoder. Proceeding with libx264.")
-		return "libx264", "libx264", "cpu"
+		return entities.GPUSelection{Encoder: "libx264", EncoderName: "libx264", GPUType: "cpu"}
 	}
 	var selectedGPU *entities.GPU
 
@@ -102,58 +102,58 @@ func getGPUEncoder(width, height int) (string, string, string) {
 	}
 
 	if selectedGPU != nil {
-		codec, encoder, gpuType := resolveEncoderForGPU(*selectedGPU)
-		log.Successf("User selected: %s. Using encoder: %s", selectedGPU.Name, encoder)
-		return codec, encoder, gpuType
+		ent := ResolveEncoderForGPU(*selectedGPU)
+		log.Successf("User selected: %s. Using encoder: %s", selectedGPU.Name, ent.Encoder)
+		return ent
 	}
 
 	log.Info("Proceeding with automated selection...")
 	for _, g := range allGPUs {
 		if g.Vendor == "nvidia" {
-			return resolveEncoderForGPU(g)
+			return ResolveEncoderForGPU(g)
 		}
 	}
 
 	for _, g := range allGPUs {
 		if g.Vendor == "amd" && !g.IsIntegrated {
-			return resolveEncoderForGPU(g)
+			return ResolveEncoderForGPU(g)
 		}
 	}
 
 	if width <= 3840 && height <= 2160 {
 		for _, g := range allGPUs {
 			if g.IsIntegrated {
-				return resolveEncoderForGPU(g)
+				return ResolveEncoderForGPU(g)
 			}
 		}
 	}
 
 	log.Warn("No suitable GPU configuration found, defaulting to CPU")
-	return "libx264", "libx264", "cpu"
+	return entities.GPUSelection{Encoder: "libx264", EncoderName: "libx264", GPUType: "cpu"}
 }
 
-func resolveEncoderForGPU(g entities.GPU) (string, string, string) {
+func ResolveEncoderForGPU(g entities.GPU) entities.GPUSelection {
 	switch g.Vendor {
 	case "nvidia":
 		if checkEncoderSupport("hevc_nvenc") {
-			return "hevc_nvenc", "nvenc_hevc", "nvidia"
+			return entities.GPUSelection{Encoder: "hevc_nvenc", EncoderName: "nvenc_hevc", GPUType: "nvidia"}
 		}
-		return "h264_nvenc", "nvenc", "nvidia"
+		return entities.GPUSelection{Encoder: "h264_nvenc", EncoderName: "nvenc", GPUType: "nvidia"}
 
 	case "amd":
 		if runtime.GOOS == "windows" {
-			return "h264_amf", "amf", "amd_discrete"
+			return entities.GPUSelection{Encoder: "h264_amf", EncoderName: "amf", GPUType: "amd_discrete"}
 		}
-		return "h264_vaapi", "vaapi", "amd_discrete"
+		return entities.GPUSelection{Encoder: "h264_vaapi", EncoderName: "vaapi", GPUType: "amd_discrete"}
 
 	case "intel":
 		if checkEncoderSupport("h264_qsv") {
-			return "h264_qsv", "qsv", "intel_integrated"
+			return entities.GPUSelection{Encoder: "h264_qsv", EncoderName: "qsv", GPUType: "intel_integrated"}
 		}
-		return "h264_vaapi", "vaapi", "intel_integrated"
+		return entities.GPUSelection{Encoder: "h264_vaapi", EncoderName: "vaapi", GPUType: "intel_integrated"}
 
 	default:
-		return "libx264", "libx264", "cpu"
+		return entities.GPUSelection{Encoder: "libx264", EncoderName: "libx264", GPUType: "cpu"}
 	}
 }
 
@@ -166,17 +166,17 @@ func checkEncoderSupport(codec string) bool {
 	return strings.Contains(string(output), codec)
 }
 
-func getEncoderArgs(encoder, encoderName, gpuType string, width, height int, useScaling bool) ffmpeg.KwArgs {
+func getEncoderArgs(eGPU entities.GPUSelection, width, height int, useScaling bool) ffmpeg.KwArgs {
 	baseArgs := ffmpeg.KwArgs{}
 	targetWidth, targetHeight := width, height
 	if useScaling {
-		targetWidth, targetHeight = calculateScaledDimensions(width, height, gpuType)
+		targetWidth, targetHeight = calculateScaledDimensions(width, height, eGPU.GPUType)
 	}
 	baseArgs["movflags"] = "faststart"
 
-	switch encoderName {
+	switch eGPU.EncoderName {
 	case "nvenc", "nvenc_hevc":
-		baseArgs["c:v"] = encoder
+		baseArgs["c:v"] = eGPU.Encoder
 		baseArgs["preset"] = "p4"
 		baseArgs["cq"] = "23"
 		baseArgs["rc"] = "constqp"
@@ -189,29 +189,29 @@ func getEncoderArgs(encoder, encoderName, gpuType string, width, height int, use
 		}
 		baseArgs["bf"] = "0"
 	case "amf":
-		baseArgs["c:v"] = encoder
+		baseArgs["c:v"] = eGPU.Encoder
 		baseArgs["quality"] = "quality"
 		baseArgs["profile"] = "high"
 		if useScaling {
 			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos,format=yuv420p", targetWidth, targetHeight)
 		}
 	case "qsv":
-		baseArgs["c:v"] = encoder
+		baseArgs["c:v"] = eGPU.Encoder
 		baseArgs["preset"] = "quality"
 		baseArgs["profile"] = "high"
 		if useScaling {
 			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos,format=yuv420p", targetWidth, targetHeight)
 		}
 	case "vaapi":
-		baseArgs["c:v"] = encoder
-		if gpuType == "amd_integrated" || gpuType == "intel_integrated" {
+		baseArgs["c:v"] = eGPU.Encoder
+		if eGPU.GPUType == "amd_integrated" || eGPU.GPUType == "intel_integrated" {
 			baseArgs["vaapi_device"] = "/dev/dri/renderD128"
 		}
 		if useScaling {
 			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos", targetWidth, targetHeight)
 		}
 	default: // libx264 and others
-		baseArgs["c:v"] = encoder
+		baseArgs["c:v"] = eGPU.Encoder
 		baseArgs["preset"] = "medium"
 		baseArgs["crf"] = "23"
 	}

@@ -24,13 +24,15 @@ func LoadTextureAtlas(assetPath string, textureSizeLimit int) error {
 			continue
 		}
 
-		f, err := os.Open(assetPath + "/" + file.Name())
+		var f *os.File
+		f, err = os.Open(assetPath + "/" + file.Name())
 		if err != nil {
 			log.Errorf("Error opening texture file %s: %v", file.Name(), err)
 			continue
 		}
 
-		img, _, err := image.Decode(f)
+		var img image.Image
+		img, _, err = image.Decode(f)
 		err = f.Close()
 		if err != nil {
 			log.Errorf("Failed to close image: %v", err)
@@ -59,7 +61,7 @@ func LoadTextureAtlas(assetPath string, textureSizeLimit int) error {
 		})
 	}
 
-	log.Successf("Texture Atlas loaded into memory. (Size limit: %dpx)", textureSizeLimit)
+	log.Debugf("Texture Atlas loaded into memory. (Size limit: %dpx)", textureSizeLimit)
 	return nil
 }
 

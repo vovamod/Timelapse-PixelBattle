@@ -4,16 +4,29 @@ import (
 	"Timelapse-PixelBattle/internal/db"
 	"Timelapse-PixelBattle/internal/graphics"
 	"Timelapse-PixelBattle/pkg/entities"
+	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/vovamod/utils/log"
 )
 
+var version = "unknown"
+
+func init() {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if info.Main.Version != "" {
+			version = info.Main.Version
+		}
+	}
+}
+
 func main() {
 	var cli entities.CLI
 	log.RegisterCustom("info", log.ColorBrightGreen, nil)
 	ctx := kong.Parse(&cli)
+	log.Infof("Running timelapse-pb CLI version: %s", version)
 
 	if cli.Debug {
 		log.SetType(log.LoggerDebug)
@@ -25,15 +38,18 @@ func main() {
 	}
 	timer := time.Now()
 
+	eGPU := graphics.GetGPUEncoder(cli.Width, cli.Height)
+	log.Info(fmt.Sprintf("Selected encoder: %s (%s) for %s", eGPU.EncoderName, eGPU.Encoder, eGPU.GPUType))
+
 	//  LOAD DB
 	data := loadData(cli.PlayerName, cli.DBSource, cli.DBIp, cli.DBUser, cli.DBPassword, cli.DBName, cli.DBTable, cli.DBTLS, cli.Local)
 
 	switch ctx.Command() {
 	case "render":
-
-		err = graphics.EncodeGPU(*data, cli.Width, cli.Height, cli.Iterations, cli.TextureSize, cli.Framerate, cli.Render.Output, cli.PlayerName, cli.WithInfo, cli.Debug)
+		err = graphics.EncodeGPU(*data, cli.Width, cli.Height, cli.Iterations, cli.TextureSize, cli.Framerate,
+			cli.Render.Output, cli.PlayerName, eGPU, cli.WithInfo, cli.Debug, nil)
 	case "photo":
-		err = graphics.GeneratePhotoLocal(data, cli.Width, cli.Height, cli.TextureSize, cli.Photo.Output)
+		_, err = graphics.GeneratePhotoLocal(data, cli.Width, cli.Height, cli.TextureSize, cli.Photo.Output)
 	}
 
 	if err != nil {
@@ -69,7 +85,6 @@ func loadData(playername, dbSource, dbIp, dbUser, dbPassword, dbName, dbTable st
 		}
 
 		log.CustomStreamf("info", "Parsed %v out of %v. Est parse speed: %v/s", len(data), num, recordsPerSecond)
-		//num, _ = db.GetMaxCount(dbTable, playername) // to keep track of NEW records // 09.04.2026 - retired. not recommended to be runed in real environment
 	}
 	db.Close()
 	return &data

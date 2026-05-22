@@ -1,11 +1,13 @@
 # Timelapse-PixelBattle
 
 Simple tool to render a timelapse / pixel battle video or single photo from pixel placement records.
+
 ---
 
 ## Prerequisites
 
 * Go 1.20+ (or compatible)
+* fyne (for gui)
 * `ffmpeg` binary installed and available on `PATH` (used by `github.com/u2takey/ffmpeg-go`)
 * assets folder with Minecraft textures in .png format (not included due to licensing; obtain from your own Minecraft installation or resource packs)
 * A shell/terminal
@@ -18,19 +20,30 @@ Install ffmpeg examples:
 
 ---
 
+# Beta
+
+Currently developed a fyne GUI for last module in this project. TL-Maker.
+
+---
+
 ## Build
 
 From project root:
 
 ```bash
 # download dependencies and build
-go mod tidy
-CGO_ENABLED=1 go build -o timelapse ./cmd/timelapse-pb # if windows go build -o timelapse.exe
+# CLI version
+CGO_ENABLED=1 go build -o timelapse-cli ./cmd/timelapse-cli # if windows go build -o timelapse.exe
+# GUI version
+CGO_ENABLED=1 go build -o timelapse-gui ./cmd/timelapse-gui
 ```
 
 **Recommended build flags:**
 ```bash
-CGO_ENABLED=1 GOAMD64=v3 go build -o timelapse -ldflags="-s -w" -trimpath -tags netgo ./cmd/timelapse-pb # if windows go build -o timelapse.exe
+# CLI version
+CGO_ENABLED=1 GOAMD64=v3 go build -o timelapse-cli -ldflags="-s -w" -trimpath ./cmd/timelapse-cli # if windows go build -o timelapse.exe
+# GUI version
+CGO_ENABLED=1 GOAMD64=v3 go build -o timelapse-gui -ldflags="-s -w" -trimpath ./cmd/timelapse-gui
 ```
 
 
@@ -38,7 +51,7 @@ This produces an executable named `timelapse` (or `timelapse.exe` on Windows).
 
 ---
 
-## Usage
+## Usage (CLI only)
 
 The program uses flags and command to set itself up and run. Minimal required flags are: filename, db-* (base on your setup).
 
@@ -46,8 +59,8 @@ The commands available: render, photo
 
 **Example:**
 ```
-./timelapse render --filename=out.mp4 --db-source=./some.db [options]
-./timelapse photo --filename=out.png --db-source=./some.db [options]
+./timelapse-cli render --filename=out.mp4 --db-source=./some.db [options]
+./timelapse-cli photo --filename=out.png --db-source=./some.db [options]
 ```
 
 Flags:
@@ -101,13 +114,13 @@ create index idx_owner_id
 Run:
 
 ```bash
-./timelapse render --local --db-source=dump.sql --db-table=TaBLe --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
+./timelapse-cli render --local --db-source=dump.sql --db-table=TaBLe --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
 ```
 
 For a single photo from the dump:
 
 ```bash
-./timelapse photo --local --db-source=dump.sql --db-table=TaBLe --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
+./timelapse-cli photo --local --db-source=dump.sql --db-table=TaBLe --filename=timelapse.mp4 --width=1080 --height=1920 --framerate=30 --iterations=16
 ```
 
 ### Normal mode (db)
@@ -115,7 +128,7 @@ For a single photo from the dump:
 Ensure your DB is reachable and contains table `PB` with compatible columns. Example run:
 
 ```bash
-./timelapse render --db-ip=127.0.0.1:9000 --db-table=TaBLe --db-user=user --db-password=pass --db-name=default --filename=timelapse.mp4
+./timelapse-cli render --db-ip=127.0.0.1:9000 --db-table=TaBLe --db-user=user --db-password=pass --db-name=default --filename=timelapse.mp4
 ```
 
 ---
