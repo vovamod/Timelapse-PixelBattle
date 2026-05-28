@@ -79,31 +79,27 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	}()
 	go func() {
 		var err error
+		videoInput := ffmpeg.Input("pipe:0", ffmpeg.KwArgs{
+			"f":                 "rawvideo",
+			"pix_fmt":           "yuv420p",
+			"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
+			"r":                 fmt.Sprintf("%d", framerate),
+			"thread_queue_size": "8192", // Doubled again
+			"threads":           "4",
+		})
+		// Added to PREVENT SOME messaging app to mistake it as GIF
+		audioInput := ffmpeg.Input("anullsrc=channel_layout=stereo:sample_rate=48000", ffmpeg.KwArgs{
+			"f": "lavfi",
+		})
 		if debug {
-			err = ffmpeg.Input("pipe:0", ffmpeg.KwArgs{
-				"f":                 "rawvideo",
-				"pix_fmt":           "yuv420p",
-				"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
-				"r":                 fmt.Sprintf("%d", framerate),
-				"thread_queue_size": "8192", // Doubled again
-				"threads":           "4",
-			}).
-				Output(filename, outputArgs).
+			err = ffmpeg.Output([]*ffmpeg.Stream{videoInput, audioInput}, filename, outputArgs).
 				Silent(false).
 				WithInput(pr).
 				ErrorToStdOut().
 				OverWriteOutput().
 				Run()
 		} else {
-			err = ffmpeg.Input("pipe:0", ffmpeg.KwArgs{
-				"f":                 "rawvideo",
-				"pix_fmt":           "yuv420p",
-				"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
-				"r":                 fmt.Sprintf("%d", framerate),
-				"thread_queue_size": "8192", // Doubled again
-				"threads":           "4",
-			}).
-				Output(filename, outputArgs).
+			err = videoInput.
 				OverWriteOutput().
 				WithInput(pr).
 				Run()

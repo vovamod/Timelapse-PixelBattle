@@ -173,6 +173,8 @@ func getEncoderArgs(eGPU entities.GPUSelection, width, height int, useScaling bo
 		targetWidth, targetHeight = calculateScaledDimensions(width, height, eGPU.GPUType)
 	}
 	baseArgs["movflags"] = "faststart"
+	baseArgs["c:a"] = "aac"
+	baseArgs["shortest"] = ""
 
 	switch eGPU.EncoderName {
 	case "nvenc", "nvenc_hevc":
