@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"fmt"
 	"image"
-	"image/color"
 	"image/png"
 	"io"
 	"os"
@@ -23,7 +22,7 @@ import (
 )
 
 func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSize, framerate int,
-	filename, playername string, eGPU entities.GPUSelection, renderTime, debug bool, onPreview func(img image.Image, progress float64)) error {
+	filename, playername string, eGPU entities.GPUSelection, renderTime, debug bool, previewBuffer *image.RGBA, onPreview func(progress float64)) error {
 	uiOffset := 0
 	if renderTime {
 		uiOffset = height / 10
@@ -99,7 +98,7 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 				OverWriteOutput().
 				Run()
 		} else {
-			err = videoInput.
+			err = ffmpeg.Output([]*ffmpeg.Stream{videoInput, audioInput}, filename, outputArgs).
 				OverWriteOutput().
 				WithInput(pr).
 				Run()
@@ -166,13 +165,14 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 		}
 
 		// GUI
-		if onPreview != nil {
+		if onPreview != nil && previewBuffer != nil {
 			currentFrameIdx := i / batchSize
 			progressPercent := float64(currentFrameIdx+1) / float64(totalFrames)
 			if currentFrameIdx%previewInterval == 0 || currentFrameIdx == totalFrames-1 {
-				onPreview(convertYUVToImage(masterCanvas, width, inputHeight, uOffset, vOffset), progressPercent)
+				convertYUVToImage(masterCanvas, width, inputHeight, uOffset, vOffset, previewBuffer)
+				onPreview(progressPercent)
 			} else {
-				onPreview(nil, progressPercent)
+				onPreview(progressPercent)
 			}
 		}
 
@@ -265,40 +265,54 @@ func VerifyVideoFile(filename string) {
 
 // Other func
 
-func convertYUVToImage(yuv []byte, w, h, uOff, vOff int) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
+func convertYUVToImage(yuv []byte, w, h, uOff, vOff int, destImg *image.RGBA) {
+	if destImg == nil {
+		return
+	}
+	rgba := destImg
+	if rgba.Bounds().Dx() != w || rgba.Bounds().Dy() != h {
+		rgba = image.NewRGBA(image.Rect(0, 0, w, h))
+		*destImg = *rgba
+	}
+
+	halfW := w / 2
+
 	for y := 0; y < h; y++ {
+		yRowOff := y * w
+		uvRowOff := (y / 2) * halfW
+		pixRowOff := y * rgba.Stride
+
 		for x := 0; x < w; x++ {
-			yIdx := y*w + x
-			uvIdx := (y/2)*(w/2) + (x / 2)
+			yVal := int(yuv[yRowOff+x])
+			uVal := int(yuv[uOff+uvRowOff+(x/2)]) - 128
+			vVal := int(yuv[vOff+uvRowOff+(x/2)]) - 128
 
-			Y := float64(yuv[yIdx])
-			U := float64(yuv[uOff+uvIdx]) - 128
-			V := float64(yuv[vOff+uvIdx]) - 128
+			r := yVal + ((vVal * 22970) >> 14)
+			g := yVal - ((uVal*5636 + vVal*11698) >> 14)
+			b := yVal + ((uVal * 29072) >> 14)
+			if r > 255 {
+				r = 255
+			} else if r < 0 {
+				r = 0
+			}
+			if g > 255 {
+				g = 255
+			} else if g < 0 {
+				g = 0
+			}
+			if b > 255 {
+				b = 255
+			} else if b < 0 {
+				b = 0
+			}
 
-			r := Y + 1.402*V
-			g := Y - 0.344136*U - 0.714136*V
-			b := Y + 1.772*U
-
-			img.Set(x, y, color.RGBA{
-				R: uint8(clamp(r)),
-				G: uint8(clamp(g)),
-				B: uint8(clamp(b)),
-				A: 255,
-			})
+			pixIdx := pixRowOff + (x * 4)
+			rgba.Pix[pixIdx] = uint8(r)   // R
+			rgba.Pix[pixIdx+1] = uint8(g) // G
+			rgba.Pix[pixIdx+2] = uint8(b) // B
+			rgba.Pix[pixIdx+3] = 255      // A
 		}
 	}
-	return img
-}
-
-func clamp(val float64) float64 {
-	if val < 0 {
-		return 0
-	}
-	if val > 255 {
-		return 255
-	}
-	return val
 }
 
 func drawFooterYUV(pix []uint8, w, h, uiH, frame int, timestamp string, playername string) {

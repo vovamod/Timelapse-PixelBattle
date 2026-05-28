@@ -47,7 +47,7 @@ func main() {
 	switch ctx.Command() {
 	case "render":
 		err = graphics.EncodeGPU(*data, cli.Width, cli.Height, cli.Iterations, cli.TextureSize, cli.Framerate,
-			cli.Render.Output, cli.PlayerName, eGPU, cli.WithInfo, cli.Debug, nil)
+			cli.Render.Output, cli.PlayerName, eGPU, cli.WithInfo, cli.Debug, nil, nil)
 	case "photo":
 		_, err = graphics.GeneratePhotoLocal(data, cli.Width, cli.Height, cli.TextureSize, cli.Photo.Output)
 	}
