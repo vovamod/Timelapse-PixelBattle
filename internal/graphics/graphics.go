@@ -50,60 +50,70 @@ func EncodeGPU(dest []entities.VisualData, width, height, iterations, textureSiz
 	totalSize := (inputHeight * width * 3) / 2
 	outputArgs := getEncoderArgs(eGPU, width, inputHeight, needsScaling)
 
-	pr, pw := io.Pipe()
+	videoInput := ffmpeg.Input("pipe:0", ffmpeg.KwArgs{
+		"f":                 "rawvideo",
+		"pix_fmt":           "yuv420p",
+		"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
+		"r":                 fmt.Sprintf("%d", framerate),
+		"thread_queue_size": "8192", // Doubled again
+		"threads":           "4",
+	})
+	// Added to PREVENT SOME messaging app to mistake it as GIF
+	audioInput := ffmpeg.Input("anullsrc=channel_layout=stereo:sample_rate=48000", ffmpeg.KwArgs{
+		"f": "lavfi",
+	})
+	stream := ffmpeg.Output([]*ffmpeg.Stream{videoInput, audioInput}, filename, outputArgs).OverWriteOutput()
+	if debug {
+		stream = stream.Silent(false).ErrorToStdOut()
+	}
+	cmd := stream.Compile()
+
+	var stdin io.WriteCloser
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to open ffmpeg stdin pipe: %w", err)
+	}
+	if f, ok := stdin.(*os.File); ok {
+		trySetPipeSize(f, 1<<20) // best-effort 1MB kernel pipe buffer (Linux only)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+
 	bufferPool := &sync.Pool{
 		New: func() interface{} {
 			return make([]byte, totalSize)
 		},
 	}
-	pwBuffered := bufio.NewWriterSize(pw, 1024*1024*64) // for myself: Use between 2 MB - 78 MB. Anything else -> trash
-	frameChan := make(chan []uint8, 60)
-	errChan := make(chan error, 1)
+
+	const targetFrameChanBytes = 48 * 1024 * 1024
+	frameChanCapacity := targetFrameChanBytes / totalSize
+	if frameChanCapacity < 4 {
+		frameChanCapacity = 4
+	} else if frameChanCapacity > 64 {
+		frameChanCapacity = 64
+	}
+	frameChan := make(chan []uint8, frameChanCapacity)
+	errChan := make(chan error, 2)
 	go func() {
+		stdinBuffered := bufio.NewWriterSize(stdin, 1024*1024*64) // for myself: Use between 2 MB - 78 MB. Anything else -> trash
 		for pix := range frameChan {
-			if _, err := pwBuffered.Write(pix); err != nil {
+			if _, err := stdinBuffered.Write(pix); err != nil {
 				errChan <- err
+				_ = stdin.Close()
 				return
 			}
 			bufferPool.Put(pix)
 		}
-		err := pwBuffered.Flush()
-		if err != nil {
+		if err := stdinBuffered.Flush(); err != nil {
 			log.Warn("Error flushing buffered writer")
 		}
-		err = pw.Close()
-		if err != nil {
-			log.Warn("Error closing buffered writer")
+		if err := stdin.Close(); err != nil {
+			log.Warn("Error closing ffmpeg stdin pipe")
 		}
 	}()
 	go func() {
-		var err error
-		videoInput := ffmpeg.Input("pipe:0", ffmpeg.KwArgs{
-			"f":                 "rawvideo",
-			"pix_fmt":           "yuv420p",
-			"s":                 fmt.Sprintf("%dx%d", width, inputHeight),
-			"r":                 fmt.Sprintf("%d", framerate),
-			"thread_queue_size": "8192", // Doubled again
-			"threads":           "4",
-		})
-		// Added to PREVENT SOME messaging app to mistake it as GIF
-		audioInput := ffmpeg.Input("anullsrc=channel_layout=stereo:sample_rate=48000", ffmpeg.KwArgs{
-			"f": "lavfi",
-		})
-		if debug {
-			err = ffmpeg.Output([]*ffmpeg.Stream{videoInput, audioInput}, filename, outputArgs).
-				Silent(false).
-				WithInput(pr).
-				ErrorToStdOut().
-				OverWriteOutput().
-				Run()
-		} else {
-			err = ffmpeg.Output([]*ffmpeg.Stream{videoInput, audioInput}, filename, outputArgs).
-				OverWriteOutput().
-				WithInput(pr).
-				Run()
-		}
-		errChan <- err
+		errChan <- cmd.Wait()
 	}()
 
 	masterCanvas := bufferPool.Get().([]uint8)

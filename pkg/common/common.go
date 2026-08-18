@@ -3,6 +3,7 @@ package common
 import (
 	"Timelapse-PixelBattle/pkg/entities"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -16,6 +17,8 @@ func GetAvailableGPUs() []entities.GPU {
 		return getWindowsGPUs()
 	case "linux":
 		return getLinuxGPUs()
+	case "darwin":
+		return getDarwinGPUs()
 	default:
 		log.Warn("GPU detection not supported on this OS")
 		return []entities.GPU{}
@@ -85,13 +88,80 @@ func getLinuxGPUs() []entities.GPU {
 			continue
 		}
 
-		lowerLine := strings.ToLower(line)
+		fields := strings.SplitN(line, " ", 2)
+		if len(fields) != 2 {
+			continue
+		}
+		pciAddress, name := fields[0], fields[1]
+		lowerLine := strings.ToLower(name)
 		vendor := identifyVendor(lowerLine)
 
 		gpus = append(gpus, entities.GPU{
-			Name:         line[8:],
+			Name:         name,
 			Vendor:       vendor,
 			IsIntegrated: vendor == "intel" || (vendor == "amd" && strings.Contains(lowerLine, "integrated")),
+			PCIAddress:   pciAddress,
+		})
+	}
+	return gpus
+}
+
+func ResolveVaapiRenderNode(pciAddress string) string {
+	if pciAddress == "" {
+		return ""
+	}
+	entries, err := os.ReadDir("/sys/class/drm")
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "renderD") {
+			continue
+		}
+		target, err := os.Readlink("/sys/class/drm/" + e.Name() + "/device")
+		if err != nil {
+			continue
+		}
+		if strings.HasSuffix(target, pciAddress) {
+			return "/dev/dri/" + e.Name()
+		}
+	}
+	return ""
+}
+
+func getDarwinGPUs() []entities.GPU {
+	cmd := exec.Command("system_profiler", "SPDisplaysDataType")
+	output, err := cmd.Output()
+	if err != nil {
+		return []entities.GPU{}
+	}
+
+	var gpus []entities.GPU
+	lines := strings.Split(string(output), "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "Chipset Model:") {
+			continue
+		}
+		name := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
+		vendor := identifyVendor(name)
+
+		isIntegrated := vendor == "apple"
+		for j := i + 1; j < len(lines) && j < i+6; j++ {
+			busLine := strings.TrimSpace(lines[j])
+			if strings.HasPrefix(busLine, "Chipset Model:") {
+				break
+			}
+			if strings.HasPrefix(busLine, "Bus:") {
+				isIntegrated = strings.Contains(strings.ToLower(busLine), "built-in")
+				break
+			}
+		}
+
+		gpus = append(gpus, entities.GPU{
+			Name:         name,
+			Vendor:       vendor,
+			IsIntegrated: isIntegrated,
 		})
 	}
 	return gpus
@@ -100,6 +170,8 @@ func getLinuxGPUs() []entities.GPU {
 func identifyVendor(input string) string {
 	input = strings.ToLower(input)
 	switch {
+	case strings.Contains(input, "apple"):
+		return "apple"
 	case strings.Contains(input, "nvidia"):
 		return "nvidia"
 	case strings.Contains(input, "amd") || strings.Contains(input, "ati") || strings.Contains(input, "radeon"):

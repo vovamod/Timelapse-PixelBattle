@@ -27,6 +27,8 @@ func getMaxResolution(gpuType string) (int, int) {
 		return 3840, 2160
 	case "intel_integrated":
 		return 3840, 2160
+	case "apple":
+		return 4096, 2304
 	default:
 		return 1920, 1080
 	}
@@ -133,6 +135,9 @@ func GetGPUEncoder(width, height int) entities.GPUSelection {
 }
 
 func ResolveEncoderForGPU(g entities.GPU) entities.GPUSelection {
+	if runtime.GOOS == "darwin" {
+		return resolveVideoToolboxEncoder()
+	}
 	switch g.Vendor {
 	case "nvidia":
 		if checkEncoderSupport("hevc_nvenc") {
@@ -144,17 +149,24 @@ func ResolveEncoderForGPU(g entities.GPU) entities.GPUSelection {
 		if runtime.GOOS == "windows" {
 			return entities.GPUSelection{Encoder: "h264_amf", EncoderName: "amf", GPUType: "amd_discrete"}
 		}
-		return entities.GPUSelection{Encoder: "h264_vaapi", EncoderName: "vaapi", GPUType: "amd_discrete"}
+		return entities.GPUSelection{Encoder: "h264_vaapi", EncoderName: "vaapi", GPUType: "amd_discrete", Device: common.ResolveVaapiRenderNode(g.PCIAddress)}
 
 	case "intel":
 		if checkEncoderSupport("h264_qsv") {
 			return entities.GPUSelection{Encoder: "h264_qsv", EncoderName: "qsv", GPUType: "intel_integrated"}
 		}
-		return entities.GPUSelection{Encoder: "h264_vaapi", EncoderName: "vaapi", GPUType: "intel_integrated"}
+		return entities.GPUSelection{Encoder: "h264_vaapi", EncoderName: "vaapi", GPUType: "intel_integrated", Device: common.ResolveVaapiRenderNode(g.PCIAddress)}
 
 	default:
 		return entities.GPUSelection{Encoder: "libx264", EncoderName: "libx264", GPUType: "cpu"}
 	}
+}
+
+func resolveVideoToolboxEncoder() entities.GPUSelection {
+	if checkEncoderSupport("hevc_videotoolbox") {
+		return entities.GPUSelection{Encoder: "hevc_videotoolbox", EncoderName: "videotoolbox_hevc", GPUType: "apple"}
+	}
+	return entities.GPUSelection{Encoder: "h264_videotoolbox", EncoderName: "videotoolbox", GPUType: "apple"}
 }
 
 func checkEncoderSupport(codec string) bool {
@@ -206,11 +218,31 @@ func getEncoderArgs(eGPU entities.GPUSelection, width, height int, useScaling bo
 		}
 	case "vaapi":
 		baseArgs["c:v"] = eGPU.Encoder
-		if eGPU.GPUType == "amd_integrated" || eGPU.GPUType == "intel_integrated" {
-			baseArgs["vaapi_device"] = "/dev/dri/renderD128"
+		if eGPU.Device != "" {
+			baseArgs["vaapi_device"] = eGPU.Device
 		}
 		if useScaling {
-			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos", targetWidth, targetHeight)
+			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos,format=nv12,hwupload", targetWidth, targetHeight)
+		} else {
+			baseArgs["vf"] = "format=nv12,hwupload"
+		}
+	case "videotoolbox":
+		baseArgs["c:v"] = eGPU.Encoder
+		baseArgs["allow_sw"] = "1"
+		baseArgs["realtime"] = "0"
+		baseArgs["q:v"] = "65"
+		baseArgs["profile:v"] = "high"
+		if useScaling {
+			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos,format=yuv420p", targetWidth, targetHeight)
+		}
+	case "videotoolbox_hevc":
+		baseArgs["c:v"] = eGPU.Encoder
+		baseArgs["allow_sw"] = "1"
+		baseArgs["realtime"] = "0"
+		baseArgs["q:v"] = "65"
+		baseArgs["tag:v"] = "hvc1"
+		if useScaling {
+			baseArgs["vf"] = fmt.Sprintf("scale=%d:%d:flags=lanczos,format=yuv420p", targetWidth, targetHeight)
 		}
 	default: // libx264 and others
 		baseArgs["c:v"] = eGPU.Encoder

@@ -97,32 +97,37 @@ func blitYUV(canvas []uint8, tex *entities.Texture, startX, startY, canvasW, uOf
 	strideY := canvasW
 	strideUV := canvasW / 2
 
-	texW := tex.Rect.Dx()
-	texH := tex.Rect.Dy()
+	rows := tex.Rect.Dy()
+	if maxRows := uOff/strideY - startY; maxRows < rows {
+		rows = maxRows
+	}
+	cols := tex.Rect.Dx()
+	if maxCols := canvasW - startX; maxCols < cols {
+		cols = maxCols
+	}
+	if rows <= 0 || cols <= 0 {
+		return
+	}
 
-	for row := 0; row < texH; row++ {
+	for row := 0; row < rows; row++ {
 		ty := startY + row
-		if ty >= (uOff / strideY) {
-			break
-		}
+		rowOffset := ty * strideY
+		texRowOffset := row * tex.Stride
+		evenRow := ty%2 == 0
+		uvRowOffset := (ty / 2) * strideUV
 
-		for col := 0; col < texW; col++ {
-			tx := startX + col
-			if tx >= canvasW {
-				break
-			}
-
-			tIdx := (row * tex.Stride) + (col * 4)
+		for col := 0; col < cols; col++ {
+			tIdx := texRowOffset + col*4
 			r, g, b := tex.Pix[tIdx], tex.Pix[tIdx+1], tex.Pix[tIdx+2]
 
 			yVal := uint8((66*int(r)+129*int(g)+25*int(b)+128)>>8 + 16)
-			canvas[ty*strideY+tx] = yVal
+			canvas[rowOffset+startX+col] = yVal
 
-			if ty%2 == 0 && tx%2 == 0 {
+			if evenRow && (startX+col)%2 == 0 {
 				uVal := uint8((-38*int(r)-74*int(g)+112*int(b)+128)>>8 + 128)
 				vVal := uint8((112*int(r)-94*int(g)-18*int(b)+128)>>8 + 128)
 
-				uvIdx := (ty/2)*strideUV + (tx / 2)
+				uvIdx := uvRowOffset + (startX+col)/2
 				canvas[uOff+uvIdx] = uVal
 				canvas[vOff+uvIdx] = vVal
 			}
